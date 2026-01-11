@@ -1,0 +1,24 @@
+{
+  "upload_type": "software",
+  "title": "NTCP Analysis and Machine Learning Pipeline (v1.0.1)",
+  "creators": [
+    {
+      "name": "Mondal, K."
+    }
+  ],
+  "description": "Analysis pipeline for DVH preprocessing, dose metrics, classical NTCP models (LKB/RS), ML modules (ANN/XGBoost), QA reporting, and clinical factor analyses.",
+  "version": "v1.0.1",
+  "license": "MIT",
+  "language": "eng",
+  "keywords": [
+    "radiotherapy",
+    "NTCP",
+    "DVH",
+    "LKB",
+    "Relative Seriality",
+    "machine learning"
+  ],
+  "access_right": "embargoed",
+  "embargo_date": "YYYY-MM-DD",
+  "related_identifiers": []
+}
