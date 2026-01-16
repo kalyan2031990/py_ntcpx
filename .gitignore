@@ -47,3 +47,11 @@ test_reports/
 
 # Contracts (generated)
 contracts/
+
+# py_ntcpx runtime outputs (authoritative)
+output/
+
+# NTCP temporary artifacts
+*.tmp
+*.cache
+
