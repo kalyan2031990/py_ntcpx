@@ -21,6 +21,7 @@ import seaborn as sns
 from pathlib import Path
 import argparse
 import sys
+import os
 import unicodedata
 import re
 from scipy.optimize import minimize, differential_evolution
@@ -2336,7 +2337,17 @@ def create_comprehensive_excel(results_df, output_dir):
         lit_params_df = pd.DataFrame(lit_params_data)
         lit_params_df.to_excel(writer, sheet_name='Literature Parameters', index=False)
         
-        # Sheet 7: Analysis Metadata
+        # Sheet 7: Local Classical Parameters (NEW - additive)
+        if hasattr(process_all_patients, 'local_calibration_params') and process_all_patients.local_calibration_params:
+            local_params_data = []
+            for organ, params in process_all_patients.local_calibration_params.items():
+                local_params_data.append(params)
+            
+            if local_params_data:
+                local_params_df = pd.DataFrame(local_params_data)
+                local_params_df.to_excel(writer, sheet_name='Local Classical Parameters', index=False)
+        
+        # Sheet 8: Analysis Metadata (renumbered)
         metadata = [
             ['Analysis Date', pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')],
             ['Total Patients', len(results_df)],
@@ -2344,7 +2355,8 @@ def create_comprehensive_excel(results_df, output_dir):
             ['Overall Event Rate (%)', f"{(results_df['Observed_Toxicity'].sum() / len(results_df) * 100):.1f}"],
             ['Number of Organs', len(results_df['Organ'].unique())],
             ['Organs Analyzed', ', '.join(results_df['Organ'].unique())],
-            ['Traditional Models', 'LKB Log-Logistic, LKB Probit, RS Poisson'],
+            ['Traditional Models', 'LKB Log-Logistic, LKB Probit, RS Poisson (QUANTEC)'],
+            ['Local Classical Models', 'LKB Local, RS Local (cohort-calibrated)'],
             ['ML Models', 'ANN, XGBoost (where sufficient data)'],
             ['Performance Metrics', 'AUC, Brier Score'],
             ['Minimum Sample Size for ML', '15 patients per organ'],
@@ -2367,87 +2379,48 @@ def _get_single_column(df, name):
     # Multiple columns → take first non-null row-wise
     return df[cols].bfill(axis=1).iloc[:, 0]
 
-def load_patient_data(patient_data_file):
-    """Load patient data with outcomes"""
+def load_patient_data(output_dir):
+    """
+    Load patient data from Clinical Contract v2 reconciled file
+    
+    Single clinical source: code0_output/clinical_reconciled.xlsx (enforced)
+    
+    Clinical Contract v2 guarantees:
+    - patient_id: mandatory, no missing values
+    - xerostomia_grade2plus: mandatory, no missing values, must be 0 or 1
+    - followup_months: mandatory, no missing values, must be > 0
+    - Optional columns: age, sex, baseline_xerostomia, tobacco_exposure, chemotherapy, hpv_status
+    
+    Identity matching: DVH.PrimaryPatientID == clinical.patient_id
+    """
     try:
-        if patient_data_file.endswith('.xlsx') or patient_data_file.endswith('.xls'):
-            patient_df = pd.read_excel(patient_data_file)
-        else:
-            patient_df = pd.read_csv(patient_data_file)
+        # Enforce single clinical source: code0_output/clinical_reconciled.xlsx
+        # Use pipeline-root based resolution (code0_output is at pipeline root, not in output_dir)
+        pipeline_root = os.path.abspath(os.path.join(output_dir, ".."))
+        clinical_file = os.path.join(pipeline_root, "code0_output", "clinical_reconciled.xlsx")
+        clinical_path = Path(clinical_file)
         
-        # Normalize column names using utility function
-        patient_df = normalize_columns(patient_df)
-        
-        # Standardize column names (additional mapping for compatibility)
-        column_mapping = {
-            'Tx_DosePerFraction': 'dose_per_fraction',
-            'Tx_n_frac': 'n_fractions',
-            'Tx_alpha_beta': 'alpha_beta'
-        }
-        
-        for old_col, new_col in column_mapping.items():
-            if old_col in patient_df.columns:
-                patient_df = patient_df.rename(columns={old_col: new_col})
-        
-        # Bulletproof identity resolver - handles duplicate Excel columns
-        pid_series = _get_single_column(patient_df, "PrimaryPatientID")
-        anon_series = _get_single_column(patient_df, "AnonPatientID")
-        legacy_series = _get_single_column(patient_df, "PatientID")
-        
-        # Load Step1 registry for mapping
-        try:
-            from contract_validator import ContractValidator
-            patient_file_path = Path(patient_data_file)
-            contracts_dir = patient_file_path.parent.parent / "contracts"
-            if not contracts_dir.exists():
-                contracts_dir = patient_file_path.parent / "contracts"
-            validator = ContractValidator(contracts_dir)
-            registry = validator.load_step1_registry()
-            
-            if registry is not None and 'AnonPatientID' in registry.columns and 'PrimaryPatientID' in registry.columns:
-                anon_to_primary = dict(zip(registry["AnonPatientID"], registry["PrimaryPatientID"]))
-            else:
-                anon_to_primary = {}
-        except Exception as e:
-            # Registry not available - will only work if PrimaryPatientID already exists
-            anon_to_primary = {}
-        
-        if pid_series is not None:
-            patient_df["PrimaryPatientID"] = pid_series.astype(str)
-        
-        elif legacy_series is not None:
-            legacy_series = legacy_series.astype(str)
-            
-            # Check if PT-style
-            if legacy_series.str.match(r"^PT\d+$").all():
-                patient_df["AnonPatientID"] = legacy_series
-                patient_df["PrimaryPatientID"] = patient_df["AnonPatientID"].map(anon_to_primary)
-            else:
-                patient_df["PrimaryPatientID"] = legacy_series
-        
-        else:
-            raise ValueError("Clinical file must contain PrimaryPatientID or PatientID")
-        
-        # Optional AnonPatientID
-        if anon_series is not None:
-            patient_df["AnonPatientID"] = anon_series.astype(str)
-        
-        # HARD VALIDATION
-        if patient_df["PrimaryPatientID"].isna().any():
-            bad = patient_df[patient_df["PrimaryPatientID"].isna()]
-            raise ValueError(
-                f"Unresolved PrimaryPatientID for {len(bad)} rows. "
-                "Check AnonPatientID ↔ registry mapping."
+        if not clinical_path.exists():
+            raise FileNotFoundError(
+                f"Clinical Contract v2 file not found: {clinical_file}\n"
+                "Run Step 0 (code0_clinical_reconciliation.py) first to generate clinical_reconciled.xlsx"
             )
         
-        # Normalize PrimaryPatientID for matching (identity-safe key)
-        if "PrimaryPatientID" in patient_df.columns:
-            patient_df["PrimaryPatientID_norm"] = patient_df["PrimaryPatientID"].apply(normalize_dvh_id)
-        else:
-            patient_df["PrimaryPatientID_norm"] = None
+        # Load clinical data from single source
+        clinical_df = pd.read_excel(clinical_file)
         
-        # Ensure required columns exist
-        if 'Observed_Toxicity' not in patient_df.columns:
+        # Normalize column names using utility function
+        patient_df = normalize_columns(clinical_df)
+        
+        # Validate only PatientID (Clinical Contract v2 mandatory field)
+        # Note: normalize_columns() converts 'patient_id' to 'PatientID'
+        if 'PatientID' not in patient_df.columns:
+            raise ValueError("Clinical Contract v2 violation: PatientID column missing after normalization")
+        
+        # Map xerostomia_grade2plus to Observed_Toxicity for compatibility
+        if 'xerostomia_grade2plus' in patient_df.columns:
+            patient_df['Observed_Toxicity'] = patient_df['xerostomia_grade2plus']
+        elif 'Observed_Toxicity' not in patient_df.columns:
             # Try to find toxicity column
             tox_cols = [c for c in patient_df.columns if 'toxicity' in c.lower() or 'tox' in c.lower()]
             if tox_cols:
@@ -2455,6 +2428,37 @@ def load_patient_data(patient_data_file):
             else:
                 print("Warning: No toxicity column found. Creating dummy column.")
                 patient_df['Observed_Toxicity'] = 0
+        
+        # Normalize patient_id for matching (identity-safe key)
+        # Note: DVH uses PrimaryPatientID, clinical uses PatientID (normalized from patient_id)
+        # Matching: DVH.PrimaryPatientID == clinical.PatientID
+        patient_df["patient_id_norm"] = patient_df["PatientID"].apply(normalize_dvh_id)
+        
+        # Map PatientID to PrimaryPatientID for DVH matching (internal use only)
+        # This allows us to match: DVH.PrimaryPatientID == clinical.PatientID
+        patient_df["PrimaryPatientID"] = patient_df["PatientID"]
+        patient_df["PrimaryPatientID_norm"] = patient_df["patient_id_norm"]
+        
+        # Try to get AnonPatientID from registry for display (optional)
+        try:
+            from contract_validator import ContractValidator
+            contracts_dir = Path(output_dir).parent / "contracts"
+            if not contracts_dir.exists():
+                contracts_dir = Path(output_dir) / "contracts"
+            validator = ContractValidator(contracts_dir)
+            registry = validator.load_step1_registry()
+            
+            if registry is not None and 'AnonPatientID' in registry.columns and 'PrimaryPatientID' in registry.columns:
+                mapping_df = registry[['PrimaryPatientID', 'AnonPatientID']].drop_duplicates()
+                patient_df = pd.merge(
+                    patient_df,
+                    mapping_df,
+                    on='PrimaryPatientID',
+                    how='left'
+                )
+        except Exception as e:
+            # Registry not available - AnonPatientID will be None
+            pass
         
         # Fill missing values with defaults
         if 'dose_per_fraction' not in patient_df.columns:
@@ -2482,22 +2486,24 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     ntcp_calculator = NTCPCalculator()
     ml_models = MachineLearningModels()
     
-    # Load patient data
-    patient_df = load_patient_data(patient_data_file)
+    # Load patient data from Clinical Contract v2 reconciled file
+    # Note: patient_data_file parameter is kept for backward compatibility but not used
+    patient_df = load_patient_data(output_dir)
     if patient_df is None:
         return
     
-    print(f"Loaded {len(patient_df)} patient-organ combinations")
+    print(f"Loaded {len(patient_df)} patient-organ combinations from Clinical Contract v2")
     
-    # Identity-safe: PrimaryPatientID should already be set by load_patient_data()
-    # Validate that PrimaryPatientID exists
-    if 'PrimaryPatientID' not in patient_df.columns or patient_df['PrimaryPatientID'].isna().all():
-        raise ValueError("PrimaryPatientID is required for matching. Clinical data must contain PrimaryPatientID or PatientID that can be mapped.")
+    # Clinical Contract v2: PatientID is guaranteed by Step-0 (normalized from patient_id)
+    # Identity matching: DVH.PrimaryPatientID == clinical.PatientID
+    if 'PatientID' not in patient_df.columns:
+        raise ValueError("Clinical Contract v2 violation: PatientID column missing")
     
-    # Normalize PrimaryPatientID for matching
-    patient_df['PrimaryPatientID_norm'] = patient_df['PrimaryPatientID'].apply(normalize_dvh_id)
-    valid_primary_count = patient_df['PrimaryPatientID_norm'].notna().sum()
-    print(f"Using PrimaryPatientID for matching ({valid_primary_count}/{len(patient_df)} valid)")
+    # patient_id is already normalized in load_patient_data()
+    # PrimaryPatientID is mapped from patient_id for DVH matching
+    valid_patient_count = patient_df['patient_id_norm'].notna().sum() if 'patient_id_norm' in patient_df.columns else len(patient_df)
+    print(f"Using patient_id for matching (Clinical Contract v2: {valid_patient_count}/{len(patient_df)} valid)")
+    print(f"Identity matching: DVH.PrimaryPatientID == clinical.patient_id")
     
     # Get AnonPatientID for display (optional)
     has_anon = 'AnonPatientID' in patient_df.columns
@@ -2526,19 +2532,27 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     total_count = len(patient_df)
     
     for _, row in patient_df.iterrows():
-        primary_patient_id = row['PrimaryPatientID']
-        organ = row['Organ']
+        # Clinical Contract v2: use PatientID from clinical data (normalized from patient_id)
+        # Handle both normalized (PatientID) and original (patient_id) column names
+        patient_id = row.get('PatientID', row.get('patient_id', None))
+        if patient_id is None:
+            raise ValueError("Clinical Contract v2 violation: PatientID/patient_id not found in row")
+        # Map to PrimaryPatientID for DVH matching: DVH.PrimaryPatientID == clinical.PatientID
+        primary_patient_id = row.get('PrimaryPatientID', patient_id)  # Already mapped in load_patient_data()
+        
+        organ = row.get('Organ', None)  # Organ may not be in clinical data (per-patient, not per-organ)
         observed_toxicity = row['Observed_Toxicity']
         dose_per_fraction = row.get('dose_per_fraction', 2.0)
         anon_patient_id = row.get('AnonPatientID', None) if has_anon else None
         
-        # Display AnonPatientID if available, otherwise PrimaryPatientID
-        display_id = anon_patient_id if anon_patient_id else primary_patient_id
-        print(f"\nProcessing {display_id} - {organ}" + (f" (Primary: {primary_patient_id})" if anon_patient_id else ""))
+        # Display AnonPatientID if available, otherwise patient_id
+        display_id = anon_patient_id if anon_patient_id else patient_id
+        print(f"\nProcessing {display_id} - {organ if organ else 'N/A'}" + (f" (patient_id: {patient_id})" if anon_patient_id else ""))
         
-        # Load DVH data using PrimaryPatientID (identity-safe matching)
-        # DVH filenames now use PrimaryPatientID format: {PrimaryPatientID}_{Organ}.csv
-        primary_id_norm = row.get('PrimaryPatientID_norm')
+        # Load DVH data using PrimaryPatientID (mapped from patient_id)
+        # Identity matching: DVH.PrimaryPatientID == clinical.patient_id
+        # DVH filenames use PrimaryPatientID format: {PrimaryPatientID}_{Organ}.csv
+        primary_id_norm = row.get('PrimaryPatientID_norm', row.get('patient_id_norm'))
         patient_name = row.get('PatientName', '')
         dvh, extracted_patient_id = dvh_processor.load_dvh_file(
             primary_patient_id, organ, patient_name, dvh_id=primary_patient_id, dvh_id_norm=primary_id_norm
@@ -2585,9 +2599,11 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
             dvh, dose_metrics, organ, dose_per_fraction
         )
         
-        # Compile results - identity-safe: use PrimaryPatientID for matching, AnonPatientID for display
+        # Compile results - Clinical Contract v2: use patient_id from clinical data
+        # Identity matching: DVH.PrimaryPatientID == clinical.patient_id
         result_row = {
-            'PrimaryPatientID': primary_patient_id,  # REAL patient ID for matching (identity-safe key)
+            'patient_id': patient_id,  # Clinical Contract v2: patient_id from clinical data
+            'PrimaryPatientID': primary_patient_id,  # Mapped from patient_id for DVH matching (DVH uses PrimaryPatientID)
             'AnonPatientID': anon_patient_id if anon_patient_id and not pd.isna(anon_patient_id) else None,  # Anonymized ID for display only
             'Organ': organ,
             'Observed_Toxicity': observed_toxicity,
@@ -2702,6 +2718,165 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     
     # Convert to DataFrame
     results_df = pd.DataFrame(results)
+    
+    # ========================================================================
+    # LOCAL CLASSICAL CALIBRATION (NEW - Additive only)
+    # ========================================================================
+    # Fit local sigmoid curve to cohort data and compute locally calibrated
+    # LKB and RS models for fair comparison with ML
+    print("\n" + "="*60)
+    print("LOCAL CLASSICAL CALIBRATION")
+    print("="*60)
+    
+    try:
+        from ntcp_models.local_classical_calibration import (
+            fit_local_sigmoid, 
+            local_sigmoid_to_lkb, 
+            local_sigmoid_to_rs
+        )
+        
+        # Process each organ separately
+        for organ in sorted(results_df['Organ'].unique()):
+            organ_data = results_df[results_df['Organ'] == organ].copy()
+            
+            if len(organ_data) < 10:
+                print(f"  Skipping {organ}: insufficient data for local calibration (n={len(organ_data)})")
+                continue
+            
+            print(f"\n  Fitting local sigmoid for {organ} (n={len(organ_data)})...")
+            
+            # Use mean_dose as dose metric (already computed)
+            if 'mean_dose' not in organ_data.columns:
+                print(f"    Warning: mean_dose not available for {organ}, skipping local calibration")
+                continue
+            
+            # Prepare data
+            dose_metric = organ_data['mean_dose'].values
+            toxicity = organ_data['Observed_Toxicity'].values.astype(float)
+            
+            # Remove NaN values
+            valid_mask = ~(np.isnan(dose_metric) | np.isnan(toxicity))
+            dose_metric_clean = dose_metric[valid_mask]
+            toxicity_clean = toxicity[valid_mask]
+            
+            if len(dose_metric_clean) < 10:
+                print(f"    Warning: Insufficient valid data for {organ} ({len(dose_metric_clean)} samples)")
+                continue
+            
+            # Fit local sigmoid
+            try:
+                D50_local, k_local = fit_local_sigmoid(dose_metric_clean, toxicity_clean)
+                print(f"    Local sigmoid: D50={D50_local:.2f} Gy, k={k_local:.2f} Gy")
+                
+                # Convert to LKB parameters
+                TD50_local, m_local = local_sigmoid_to_lkb(D50_local, k_local)
+                print(f"    Local LKB: TD50={TD50_local:.2f} Gy, m={m_local:.3f}")
+                
+                # Convert to RS parameters
+                D50_rs_local, gamma_local = local_sigmoid_to_rs(D50_local, k_local)
+                print(f"    Local RS: D50={D50_rs_local:.2f} Gy, gamma={gamma_local:.3f}")
+                
+                # Compute local LKB and RS NTCP for all patients in organ
+                # Use existing NTCP calculator functions with local parameters
+                organ_indices = organ_data.index
+                ntcp_lkb_local = []
+                ntcp_rs_local = []
+                
+                for idx in organ_indices:
+                    row = results_df.loc[idx]
+                    
+                    # Get dose metrics for LKB (needs v_effective and max_dose)
+                    # Use mean_dose as approximation if v_effective not available
+                    dose_val = row.get('mean_dose', np.nan)
+                    v_effective = row.get('v_effective', 1.0)  # Default to 1.0 if not available
+                    max_dose = row.get('max_dose', dose_val)  # Use mean_dose as fallback
+                    
+                    if np.isnan(dose_val):
+                        ntcp_lkb_local.append(np.nan)
+                        ntcp_rs_local.append(np.nan)
+                        continue
+                    
+                    # Local LKB NTCP using existing LKB Probit function
+                    # Use n=1.0 (volume parameter unchanged from QUANTEC)
+                    try:
+                        dose_metrics_local = {
+                            'v_effective': v_effective,
+                            'max_dose': max_dose
+                        }
+                        ntcp_lkb = ntcp_calculator.ntcp_lkb_probit(
+                            dose_metrics_local, 
+                            TD50_local, 
+                            m_local, 
+                            n=1.0
+                        )
+                        ntcp_lkb_local.append(ntcp_lkb)
+                    except:
+                        # Fallback: simplified LKB using mean dose
+                        from scipy.stats import norm
+                        t = (dose_val - TD50_local) / (m_local * TD50_local) if TD50_local > 0 else 0
+                        ntcp_lkb = norm.cdf(t)
+                        ntcp_lkb = np.clip(ntcp_lkb, 1e-10, 1 - 1e-10)
+                        ntcp_lkb_local.append(ntcp_lkb)
+                    
+                    # Local RS NTCP - need DVH for full RS calculation
+                    # For now, use simplified approximation with mean dose
+                    # In production, would load DVH and use ntcp_calculator.ntcp_rs_poisson()
+                    try:
+                        # Simplified RS: NTCP = 1 - exp(-exp(gamma * (D/D50 - 1)))
+                        dose_ratio = dose_val / D50_rs_local if D50_rs_local > 0 else 0
+                        ntcp_rs = 1.0 - np.exp(-np.exp(gamma_local * (dose_ratio - 1.0)))
+                        ntcp_rs = np.clip(ntcp_rs, 1e-10, 1 - 1e-10)
+                        ntcp_rs_local.append(ntcp_rs)
+                    except:
+                        ntcp_rs_local.append(np.nan)
+                
+                # Add to results DataFrame
+                results_df.loc[organ_indices, 'NTCP_LKB_LOCAL'] = ntcp_lkb_local
+                results_df.loc[organ_indices, 'NTCP_RS_LOCAL'] = ntcp_rs_local
+                
+                print(f"    Added local LKB and RS predictions for {organ}")
+                
+                # Save local parameters (will be exported to JSON later)
+                # Store in a module-level variable for later export
+                if not hasattr(process_all_patients, 'local_calibration_params'):
+                    process_all_patients.local_calibration_params = {}
+                
+                process_all_patients.local_calibration_params[organ] = {
+                    'organ': organ,
+                    'D50_local': float(D50_local),
+                    'k_local': float(k_local),
+                    'TD50_local': float(TD50_local),
+                    'm_local': float(m_local),
+                    'D50_rs_local': float(D50_rs_local),
+                    'gamma_local': float(gamma_local),
+                    'n_samples': int(len(dose_metric_clean))
+                }
+                
+            except Exception as e:
+                print(f"    Warning: Local calibration failed for {organ}: {e}")
+                # Add NaN columns to maintain structure
+                organ_indices = organ_data.index
+                results_df.loc[organ_indices, 'NTCP_LKB_LOCAL'] = np.nan
+                results_df.loc[organ_indices, 'NTCP_RS_LOCAL'] = np.nan
+        
+        print("\n" + "="*60)
+        
+    except ImportError as e:
+        print(f"  Warning: Local calibration module not available: {e}")
+        # Add empty columns to maintain structure
+        results_df['NTCP_LKB_LOCAL'] = np.nan
+        results_df['NTCP_RS_LOCAL'] = np.nan
+    except Exception as e:
+        print(f"  Warning: Local calibration failed: {e}")
+        # Add empty columns to maintain structure
+        if 'NTCP_LKB_LOCAL' not in results_df.columns:
+            results_df['NTCP_LKB_LOCAL'] = np.nan
+        if 'NTCP_RS_LOCAL' not in results_df.columns:
+            results_df['NTCP_RS_LOCAL'] = np.nan
+    
+    # ========================================================================
+    # END LOCAL CLASSICAL CALIBRATION
+    # ========================================================================
     
     # Calculate match rate (successful matches / total attempts) - identity-safe
     matched_cases = len(results_df) if not results_df.empty else 0
@@ -2955,6 +3130,17 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     plotter.create_model_performance_plot(results_df)
     plotter.create_overall_performance_plot(results_df)
     
+    # Export local classical calibration parameters (NEW - additive)
+    try:
+        if hasattr(process_all_patients, 'local_calibration_params') and process_all_patients.local_calibration_params:
+            import json
+            params_file = Path(output_dir) / 'local_classical_parameters.json'
+            with open(params_file, 'w') as f:
+                json.dump(process_all_patients.local_calibration_params, f, indent=2)
+            print(f"\n[LOCAL CALIBRATION] Parameters saved to: {params_file}")
+    except Exception as e:
+        print(f"Warning: Could not export local calibration parameters: {e}")
+    
     print(f"Processed {len(results_df)} valid patient-organ DVHs")
     return results_df
 
@@ -2976,7 +3162,7 @@ def create_enhanced_summary_report(results_df, output_dir):
         # Get all model performance
         model_performance = {}
         
-        # Traditional NTCP models
+        # Traditional NTCP models (QUANTEC)
         for model in ['LKB_LogLogit', 'LKB_Probit', 'RS_Poisson']:
             ntcp_col = f'NTCP_{model}'
             if ntcp_col in organ_data.columns:
@@ -2985,9 +3171,22 @@ def create_enhanced_summary_report(results_df, output_dir):
                     try:
                         fpr, tpr, _ = roc_curve(valid_data['Observed_Toxicity'], valid_data[ntcp_col])
                         auc_score = auc(fpr, tpr)
-                        model_performance[model] = auc_score
+                        model_performance[f'QUANTEC-{model}'] = auc_score
                     except:
-                        model_performance[model] = np.nan
+                        model_performance[f'QUANTEC-{model}'] = np.nan
+        
+        # Local classical models (NEW - additive)
+        for model in ['LKB_LOCAL', 'RS_LOCAL']:
+            ntcp_col = f'NTCP_{model}'
+            if ntcp_col in organ_data.columns:
+                valid_data = organ_data.dropna(subset=[ntcp_col, 'Observed_Toxicity'])
+                if len(valid_data) >= 5:
+                    try:
+                        fpr, tpr, _ = roc_curve(valid_data['Observed_Toxicity'], valid_data[ntcp_col])
+                        auc_score = auc(fpr, tpr)
+                        model_performance[f'Local-{model.replace("_LOCAL", "")}'] = auc_score
+                    except:
+                        model_performance[f'Local-{model.replace("_LOCAL", "")}'] = np.nan
         
         # ML models
         ml_cols = [col for col in organ_data.columns if col.startswith('NTCP_ML_')]
@@ -3256,8 +3455,8 @@ def main():
     parser = argparse.ArgumentParser(description='Enhanced NTCP Analysis: Traditional + ML Models')
     parser.add_argument('--dvh_dir', default='dDVH_csv', 
                        help='Directory containing DVH CSV files (default: dDVH_csv)')
-    parser.add_argument('--patient_data', default='ntcp_results.xlsx',
-                       help='Patient data file with outcomes (default: ntcp_results.xlsx)')
+    parser.add_argument('--patient_data', default=None,
+                       help='[DEPRECATED] Patient data file - now loaded from code0_output/clinical_reconciled.xlsx (Clinical Contract v2)')
     parser.add_argument('--output_dir', default='enhanced_ntcp_analysis',
                        help='Output directory (default: enhanced_ntcp_analysis)')
     parser.add_argument('--ml_models', action='store_true', default=True,
@@ -3277,15 +3476,14 @@ def main():
     
     # Validate input paths
     dvh_path = Path(args.dvh_dir)
-    patient_file = Path(args.patient_data)
+    output_path = Path(args.output_dir)
     
     if not dvh_path.exists():
         print(f"Error: Error: DVH directory '{dvh_path}' not found")
         return
     
-    if not patient_file.exists():
-        print(f"Error: Error: Patient data file '{patient_file}' not found")
-        return
+    # Clinical Contract v2: patient data is loaded from code0_output/clinical_reconciled.xlsx
+    # This is validated in load_patient_data()
     
     # Check for DVH files
     dvh_files = list(dvh_path.glob('*.csv'))
@@ -3294,7 +3492,7 @@ def main():
         return
     
     print(f" Found {len(dvh_files)} DVH files in {dvh_path}")
-    print(f" Patient data file: {patient_file}")
+    print(f" Clinical data: code0_output/clinical_reconciled.xlsx (Clinical Contract v2)")
     
     # Check XGBoost availability
     if XGBOOST_AVAILABLE:
@@ -3305,7 +3503,8 @@ def main():
     try:
         # Step 1: Enhanced processing with traditional + ML models
         print("\n[MODEL] Step 1: Enhanced DVH processing and model training...")
-        results_df = process_all_patients(args.dvh_dir, args.patient_data, args.output_dir)
+        # Clinical Contract v2: patient_data parameter is ignored, loaded from code0_output/clinical_reconciled.xlsx
+        results_df = process_all_patients(args.dvh_dir, None, args.output_dir)
         
         if results_df is None or len(results_df) == 0:
             print("Error: No data processed. Please check file formats and patient IDs.")
