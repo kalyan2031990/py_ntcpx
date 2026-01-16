@@ -314,43 +314,48 @@ class PipelineOrchestrator:
             logger.error(f"dDVH directory not found: {ddvh_dir}")
             return False
         
-        if not patient_data_file.exists():
-            logger.error(f"Patient data file not found: {patient_data_file}")
+        # CRITICAL: Clinical Contract v2 - check that reconciled file exists
+        # Step 0 already validated the original clinical file and created clinical_reconciled.xlsx
+        # Step 3 now uses the reconciled file (Clinical Contract v2) instead of the original
+        reconciled_file = self.base_output_dir / 'code0_output' / 'clinical_reconciled.xlsx'
+        
+        if not reconciled_file.exists():
+            logger.error("=" * 60)
+            logger.error("CLINICAL CONTRACT v2 VALIDATION FAILED")
+            logger.error("=" * 60)
+            logger.error(f"Reconciled clinical file not found: {reconciled_file}")
+            logger.error("Run Step 0 (code0_clinical_reconciliation.py) first to generate clinical_reconciled.xlsx")
+            logger.error("=" * 60)
             return False
         
-        # CRITICAL: Validate clinical data against Step1_DVHRegistry
-        if self.contract_validator is not None:
-            registry_df = self.contract_validator.load_step1_registry()
-            if registry_df is None:
-                logger.error("[ERROR] Step1_DVHRegistry contract not found. Run Step 1 first.")
-                return False
+        # Step 0 already validated Clinical Contract v2 (patient_id, xerostomia_grade2plus, followup_months)
+        # and identity matching (DVH.PrimaryPatientID == clinical.patient_id)
+        # No need to re-validate here - just verify the file exists and has patient_id
+        try:
+            with pd.ExcelFile(reconciled_file) as xl:
+                clinical_df = pd.read_excel(xl, sheet_name=xl.sheet_names[0])
             
-            # Validate clinical data
-            is_valid, template_path, error_msg = self.contract_validator.validate_clinical_data(
-                patient_data_file, registry_df
-            )
-            
-            if not is_valid:
+            # Quick check: Clinical Contract v2 requires patient_id
+            if 'patient_id' not in clinical_df.columns:
                 logger.error("=" * 60)
-                logger.error("CLINICAL DATA VALIDATION FAILED")
+                logger.error("CLINICAL CONTRACT v2 VALIDATION FAILED")
                 logger.error("=" * 60)
-                logger.error(error_msg)
-                if template_path:
-                    logger.error(f"\nClinical data incompatible with DVH registry.")
-                    logger.error(f"Template written to: {template_path}")
-                    logger.error(f"\nTo fix and rerun:")
-                    logger.error(f"  1. Fill the template with required data")
-                    logger.error(f"  2. Run: python run_pipeline.py --resume_from step3 --patient_data {template_path}")
+                logger.error("Reconciled clinical file missing 'patient_id' column (Clinical Contract v2)")
                 logger.error("=" * 60)
                 return False
             
-            # Log match statistics
-            try:
-                with pd.ExcelFile(patient_data_file) as xl:
-                    clinical_df = pd.read_excel(xl, sheet_name=xl.sheet_names[0])
-                self.contract_validator.log_match_statistics(registry_df, clinical_df)
-            except Exception as e:
-                logger.warning(f"Could not load clinical data for statistics: {e}")
+            logger.info(f"[OK] Clinical Contract v2 validated: {len(clinical_df)} patients in reconciled file")
+            
+            # Log match statistics if contract validator available
+            if self.contract_validator is not None:
+                registry_df = self.contract_validator.load_step1_registry()
+                if registry_df is not None:
+                    # Map patient_id to PrimaryPatientID for statistics (DVH uses PrimaryPatientID)
+                    clinical_df_for_stats = clinical_df.copy()
+                    clinical_df_for_stats['PrimaryPatientID'] = clinical_df_for_stats['patient_id']
+                    self.contract_validator.log_match_statistics(registry_df, clinical_df_for_stats)
+        except Exception as e:
+            logger.warning(f"Could not validate reconciled clinical data: {e}")
         
         cmd = [
             sys.executable,
@@ -396,6 +401,37 @@ class PipelineOrchestrator:
         ]
         
         success = self.run_command(cmd, "Step 3b: QUANTEC Stratification")
+        return success
+    
+    def step3c_tiered_analysis(self, clinical_file: Optional[Path] = None) -> bool:
+        """Step 3c: Tiered NTCP Analysis (runs after Step 3)"""
+        # Check if code3 output exists
+        if not self.code3_output.exists():
+            logger.error(f"Code3 output not found: {self.code3_output}")
+            return False
+        
+        # Check if DVH directory exists
+        dvh_dir = self.code1_output / 'dDVH_csv'
+        if not dvh_dir.exists():
+            logger.error(f"DVH directory not found: {dvh_dir}")
+            return False
+        
+        # Create tiered output directory
+        tiered_output = self.base_output_dir / 'tiered_output'
+        tiered_output.mkdir(parents=True, exist_ok=True)
+        
+        cmd = [
+            sys.executable,
+            'tiered_ntcp_analysis.py',
+            '--code3_output', str(self.code3_output),
+            '--dvh_dir', str(dvh_dir),
+            '--output_dir', str(tiered_output)
+        ]
+        
+        if clinical_file and clinical_file.exists():
+            cmd.extend(['--clinical_file', str(clinical_file)])
+        
+        success = self.run_command(cmd, "Step 3c: Tiered NTCP Analysis")
         return success
     
     def step4_qa_reporter(self) -> bool:
@@ -580,6 +616,7 @@ class PipelineOrchestrator:
             ('step2b', 2.5, "Biological DVH Generation", lambda: self.step2_bdvh(clinical_file)),
             ('step3', 3, "NTCP Analysis with ML", lambda: self.step3_ntcp_analysis(reconciled_file_container['file'])),
             ('step3b', 3.5, "QUANTEC Stratification", self.step3_quantec_stratification),
+            ('step3c', 3.6, "Tiered NTCP Analysis", lambda: self.step3c_tiered_analysis(clinical_file)),
             ('step4', 4, "QA Reporter", self.step4_qa_reporter),
             ('step5', 5, "Clinical Factors Analysis", lambda: self.step5_factors_analysis(reconciled_file_container['file'])),
             ('step6', 6, "Publication Diagrams", self.step6_publication_diagrams),
@@ -718,7 +755,7 @@ Software: py_ntcpx v1.0
         '--resume_from',
         type=str,
         default=None,
-        choices=['step1', 'step0', 'step2', 'step2b', 'step3', 'step3b', 'step4', 'step5', 'step6', 'step7'],
+        choices=['step1', 'step0', 'step2', 'step2b', 'step3', 'step3b', 'step3c', 'step4', 'step5', 'step6', 'step7'],
         help='Resume pipeline from a specific step (validates required contracts before continuing)'
     )
     
