@@ -55,3 +55,6 @@ __pycache__/
 # PowerShell transient files
 *.tmp
 
+
+# Packaging scripts
+create_apk.ps1
