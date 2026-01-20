@@ -1,0 +1,10 @@
+{
+  "Parotid": {
+    "refit": {
+      "dose_metric": "mean_dose",
+      "TD50_bounds": [15.0, 60.0],
+      "slope_bounds": [0.05, 5.0],
+      "bootstrap_iterations": 1000
+    }
+  }
+}

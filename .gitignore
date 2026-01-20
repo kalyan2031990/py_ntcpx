@@ -48,10 +48,16 @@ test_reports/
 # Contracts (generated)
 contracts/
 
-# py_ntcpx runtime outputs (authoritative)
+# Runtime outputs
 output/
+
+# Python cache
+__pycache__/
 
 # NTCP temporary artifacts
 *.tmp
 *.cache
+
+# Packaging scripts
+create_apk.ps1
 
