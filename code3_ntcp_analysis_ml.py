@@ -19,8 +19,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+from pathlib import Path as _Path
 import argparse
 import sys
+import os
 import unicodedata
 import re
 from scipy.optimize import minimize, differential_evolution
@@ -32,6 +34,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
+
+# Import v2.0 components for data leakage prevention and overfitting control
+try:
+    from src.validation.data_splitter import PatientDataSplitter
+    from src.models.machine_learning.ml_models import OverfitResistantMLModels
+    from src.features.feature_selector import RadiobiologyGuidedFeatureSelector
+    from src.metrics.auc_calculator import calculate_auc_with_ci
+    from src.reporting.leakage_detector import DataLeakageDetector
+    V2_COMPONENTS_AVAILABLE = True
+except ImportError as e:
+    V2_COMPONENTS_AVAILABLE = False
+    print(f"Warning: v2.0 components not available: {e}")
+    print("Falling back to basic implementation. Install v2.0 components for enhanced features.")
 
 # Windows-safe encoding configuration
 try:
@@ -636,33 +651,122 @@ class MachineLearningModels:
         
         print(f"   Training ML models for {organ}...")
         
-        # Prepare features
-        X, y, feature_cols = self.prepare_features(organ_data)
+        # Check if v2.0 components are available
+        use_v2_components = V2_COMPONENTS_AVAILABLE and 'PrimaryPatientID' in organ_data.columns
         
-        if X is None:
-            print(f"    Warning: Insufficient data for ML models")
-            return {}
+        if use_v2_components:
+            # V2.0: Patient-level splitting to prevent data leakage
+            print(f"     Using v2.0 patient-level splitting...")
+            
+            # Validate we have PrimaryPatientID for patient-level splitting
+            if 'PrimaryPatientID' not in organ_data.columns:
+                print(f"     Warning: PrimaryPatientID not found, falling back to row-level split")
+                use_v2_components = False
         
-        n_events = y.sum()
-        n_samples = len(y)
-        
-        print(f"     Features: {len(feature_cols)}, Samples: {n_samples}, Events: {int(n_events)}")
+        if use_v2_components:
+            # PATIENT-LEVEL SPLITTING (v2.0 - prevents data leakage)
+            splitter = PatientDataSplitter(random_seed=self.random_state, test_size=0.2)
+            train_df, test_df = splitter.create_splits(
+                organ_data,
+                patient_id_col='PrimaryPatientID',
+                outcome_col='Observed_Toxicity'
+            )
+            
+            # Check for leakage
+            leakage_detector = DataLeakageDetector()
+            leakage_check = leakage_detector.check_patient_overlap(
+                train_df, test_df, 'PrimaryPatientID'
+            )
+            if not leakage_check:
+                leakage_report = leakage_detector.generate_report()
+                print(f"     WARNING: {leakage_report['errors']}")
+            
+            # Extract features AFTER split (prevents leakage)
+            X_train_df, y_train_series, feature_cols = self.prepare_features(train_df)
+            X_test_df, y_test_series, _ = self.prepare_features(test_df)
+            
+            if X_train_df is None or X_test_df is None:
+                print(f"    Warning: Insufficient data after patient-level split")
+                return {}
+            
+            # Convert to numpy arrays
+            X_train = X_train_df.values
+            X_test = X_test_df.values
+            y_train = y_train_series.values
+            y_test = y_test_series.values
+            
+            n_events = y_train.sum()
+            n_samples = len(y_train)
+            
+            print(f"     Features: {len(feature_cols)}, Train Samples: {len(y_train)}, Events: {int(n_events)}")
+            print(f"     Test Samples: {len(y_test)}, Test Events: {int(y_test.sum())}")
+            
+        else:
+            # FALLBACK: Row-level splitting (original method)
+            print(f"     Using row-level splitting (v2.0 components not available)...")
+            
+            # Prepare features
+            X, y, feature_cols = self.prepare_features(organ_data)
+            
+            if X is None:
+                print(f"    Warning: Insufficient data for ML models")
+                return {}
+            
+            n_events = y.sum()
+            n_samples = len(y)
+            
+            print(f"     Features: {len(feature_cols)}, Samples: {n_samples}, Events: {int(n_events)}")
+            
+            # Use stratified train-test split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X.values if hasattr(X, 'values') else X,
+                y.values if hasattr(y, 'values') else y,
+                test_size=0.3, random_state=self.random_state, 
+                stratify=y if n_events >= 3 else None
+            )
         
         if n_events < 5 or n_samples < 20:
             print(f"    Warning: Insufficient events/samples for reliable ML training")
             return {}
         
-        # Use stratified train-test split to prevent data leakage
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.3, random_state=self.random_state, 
-            stratify=y if n_events >= 3 else None
-        )
-        
         results = {}
+        
+        # V2.0: Feature selection before training (if available)
+        if use_v2_components and len(feature_cols) > 3:
+            try:
+                selector = RadiobiologyGuidedFeatureSelector()
+                X_train_df = pd.DataFrame(X_train, columns=feature_cols)
+                selected_features = selector.select_features(X_train_df, y_train, organ=organ)
+                
+                if len(selected_features) < len(feature_cols):
+                    # Use only selected features
+                    selected_indices = [i for i, f in enumerate(feature_cols) if f in selected_features]
+                    X_train = X_train[:, selected_indices]
+                    X_test = X_test[:, selected_indices]
+                    feature_cols = selected_features
+                    print(f"     Selected {len(selected_features)} features: {selected_features[:5]}...")
+            except Exception as e:
+                print(f"     Warning: Feature selection failed: {e}, using all features")
         
         # Train ANN
         print(f"     Training ANN...")
-        ann_model = self.train_ann_model(X_train, y_train, organ)
+        
+        # V2.0: Use OverfitResistantMLModels if available
+        if use_v2_components:
+            try:
+                ml_model = OverfitResistantMLModels(
+                    n_features=X_train.shape[1],
+                    n_samples=len(X_train),
+                    n_events=int(np.sum(y_train)),
+                    random_seed=self.random_state
+                )
+                ann_model = ml_model.create_ann_model()
+                print(f"       EPV: {ml_model.epv:.2f} events per variable")
+            except Exception as e:
+                print(f"     Warning: OverfitResistantMLModels failed: {e}, using basic model")
+                ann_model = self.train_ann_model(X_train, y_train, organ)
+        else:
+            ann_model = self.train_ann_model(X_train, y_train, organ)
         
         if ann_model is not None:
             # Evaluate on test set
@@ -671,7 +775,20 @@ class MachineLearningModels:
             # Calculate metrics
             try:
                 fpr, tpr, _ = roc_curve(y_test, y_pred_ann)
-                auc_ann = auc(fpr, tpr)
+                
+                # V2.0: AUC with confidence intervals
+                if use_v2_components:
+                    try:
+                        auc_ann, auc_ci = calculate_auc_with_ci(y_test, y_pred_ann)
+                        print(f"       ANN - Test AUC: {auc_ann:.3f} (95% CI: {auc_ci[0]:.3f}-{auc_ci[1]:.3f})")
+                    except Exception as e:
+                        print(f"     Warning: AUC CI calculation failed: {e}")
+                        auc_ann = auc(fpr, tpr)
+                        auc_ci = (auc_ann, auc_ann)
+                else:
+                    auc_ann = auc(fpr, tpr)
+                    auc_ci = (auc_ann, auc_ann)
+                
                 brier_ann = brier_score_loss(y_test, y_pred_ann)
                 
                 # Cross-validation on training set
@@ -681,15 +798,18 @@ class MachineLearningModels:
                 results['ANN'] = {
                     'model': ann_model,
                     'test_AUC': auc_ann,
+                    'test_AUC_CI': auc_ci if use_v2_components else None,
                     'test_Brier': brier_ann,
                     'cv_AUC_mean': np.mean(cv_scores),
                     'cv_AUC_std': np.std(cv_scores),
                     'n_train': len(X_train),
                     'n_test': len(X_test),
-                    'feature_names': feature_cols
+                    'feature_names': feature_cols,
+                    'epv': ml_model.epv if use_v2_components and 'ml_model' in locals() else None
                 }
                 
-                print(f"       ANN - Test AUC: {auc_ann:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
+                if not use_v2_components or 'auc_ci' not in locals():
+                    print(f"       ANN - Test AUC: {auc_ann:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
                 
             except Exception as e:
                 print(f"      Error: ANN evaluation failed: {e}")
@@ -697,7 +817,23 @@ class MachineLearningModels:
         # Train XGBoost
         if XGBOOST_AVAILABLE:
             print(f"     Training XGBoost...")
-            xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            
+            # V2.0: Use OverfitResistantMLModels if available
+            if use_v2_components:
+                try:
+                    if 'ml_model' not in locals():
+                        ml_model = OverfitResistantMLModels(
+                            n_features=X_train.shape[1],
+                            n_samples=len(X_train),
+                            n_events=int(np.sum(y_train)),
+                            random_seed=self.random_state
+                        )
+                    xgb_model = ml_model.create_xgboost_model()
+                except Exception as e:
+                    print(f"     Warning: OverfitResistantMLModels XGBoost failed: {e}, using basic model")
+                    xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            else:
+                xgb_model = self.train_xgboost_model(X_train, y_train, organ)
             
             if xgb_model is not None:
                 # Evaluate on test set
@@ -705,7 +841,20 @@ class MachineLearningModels:
                 
                 try:
                     fpr, tpr, _ = roc_curve(y_test, y_pred_xgb)
-                    auc_xgb = auc(fpr, tpr)
+                    
+                    # V2.0: AUC with confidence intervals
+                    if use_v2_components:
+                        try:
+                            auc_xgb, auc_ci = calculate_auc_with_ci(y_test, y_pred_xgb)
+                            print(f"       XGBoost - Test AUC: {auc_xgb:.3f} (95% CI: {auc_ci[0]:.3f}-{auc_ci[1]:.3f})")
+                        except Exception as e:
+                            print(f"     Warning: AUC CI calculation failed: {e}")
+                            auc_xgb = auc(fpr, tpr)
+                            auc_ci = (auc_xgb, auc_xgb)
+                    else:
+                        auc_xgb = auc(fpr, tpr)
+                        auc_ci = (auc_xgb, auc_xgb)
+                    
                     brier_xgb = brier_score_loss(y_test, y_pred_xgb)
                     
                     # Cross-validation on training set
@@ -718,16 +867,19 @@ class MachineLearningModels:
                     results['XGBoost'] = {
                         'model': xgb_model,
                         'test_AUC': auc_xgb,
+                        'test_AUC_CI': auc_ci if use_v2_components else None,
                         'test_Brier': brier_xgb,
                         'cv_AUC_mean': np.mean(cv_scores),
                         'cv_AUC_std': np.std(cv_scores),
                         'n_train': len(X_train),
                         'n_test': len(X_test),
                         'feature_names': feature_cols,
-                        'feature_importance': feature_importance
+                        'feature_importance': feature_importance,
+                        'epv': ml_model.epv if use_v2_components and 'ml_model' in locals() else None
                     }
                     
-                    print(f"       XGBoost - Test AUC: {auc_xgb:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
+                    if not use_v2_components or 'auc_ci' not in locals():
+                        print(f"       XGBoost - Test AUC: {auc_xgb:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
                     
                     # Show top features
                     top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -2336,7 +2488,17 @@ def create_comprehensive_excel(results_df, output_dir):
         lit_params_df = pd.DataFrame(lit_params_data)
         lit_params_df.to_excel(writer, sheet_name='Literature Parameters', index=False)
         
-        # Sheet 7: Analysis Metadata
+        # Sheet 7: Local Classical Parameters (NEW - additive)
+        if hasattr(process_all_patients, 'local_calibration_params') and process_all_patients.local_calibration_params:
+            local_params_data = []
+            for organ, params in process_all_patients.local_calibration_params.items():
+                local_params_data.append(params)
+            
+            if local_params_data:
+                local_params_df = pd.DataFrame(local_params_data)
+                local_params_df.to_excel(writer, sheet_name='Local Classical Parameters', index=False)
+        
+        # Sheet 8: Analysis Metadata (renumbered)
         metadata = [
             ['Analysis Date', pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')],
             ['Total Patients', len(results_df)],
@@ -2344,7 +2506,8 @@ def create_comprehensive_excel(results_df, output_dir):
             ['Overall Event Rate (%)', f"{(results_df['Observed_Toxicity'].sum() / len(results_df) * 100):.1f}"],
             ['Number of Organs', len(results_df['Organ'].unique())],
             ['Organs Analyzed', ', '.join(results_df['Organ'].unique())],
-            ['Traditional Models', 'LKB Log-Logistic, LKB Probit, RS Poisson'],
+            ['Traditional Models', 'LKB Log-Logistic, LKB Probit, RS Poisson (QUANTEC)'],
+            ['Local Classical Models', 'LKB Local, RS Local (cohort-calibrated)'],
             ['ML Models', 'ANN, XGBoost (where sufficient data)'],
             ['Performance Metrics', 'AUC, Brier Score'],
             ['Minimum Sample Size for ML', '15 patients per organ'],
@@ -2367,87 +2530,48 @@ def _get_single_column(df, name):
     # Multiple columns → take first non-null row-wise
     return df[cols].bfill(axis=1).iloc[:, 0]
 
-def load_patient_data(patient_data_file):
-    """Load patient data with outcomes"""
+def load_patient_data(output_dir):
+    """
+    Load patient data from Clinical Contract v2 reconciled file
+    
+    Single clinical source: code0_output/clinical_reconciled.xlsx (enforced)
+    
+    Clinical Contract v2 guarantees:
+    - patient_id: mandatory, no missing values
+    - xerostomia_grade2plus: mandatory, no missing values, must be 0 or 1
+    - followup_months: mandatory, no missing values, must be > 0
+    - Optional columns: age, sex, baseline_xerostomia, tobacco_exposure, chemotherapy, hpv_status
+    
+    Identity matching: DVH.PrimaryPatientID == clinical.patient_id
+    """
     try:
-        if patient_data_file.endswith('.xlsx') or patient_data_file.endswith('.xls'):
-            patient_df = pd.read_excel(patient_data_file)
-        else:
-            patient_df = pd.read_csv(patient_data_file)
+        # Enforce single clinical source: code0_output/clinical_reconciled.xlsx
+        # Use pipeline-root based resolution (code0_output is at pipeline root, not in output_dir)
+        pipeline_root = os.path.abspath(os.path.join(output_dir, ".."))
+        clinical_file = os.path.join(pipeline_root, "code0_output", "clinical_reconciled.xlsx")
+        clinical_path = Path(clinical_file)
         
-        # Normalize column names using utility function
-        patient_df = normalize_columns(patient_df)
-        
-        # Standardize column names (additional mapping for compatibility)
-        column_mapping = {
-            'Tx_DosePerFraction': 'dose_per_fraction',
-            'Tx_n_frac': 'n_fractions',
-            'Tx_alpha_beta': 'alpha_beta'
-        }
-        
-        for old_col, new_col in column_mapping.items():
-            if old_col in patient_df.columns:
-                patient_df = patient_df.rename(columns={old_col: new_col})
-        
-        # Bulletproof identity resolver - handles duplicate Excel columns
-        pid_series = _get_single_column(patient_df, "PrimaryPatientID")
-        anon_series = _get_single_column(patient_df, "AnonPatientID")
-        legacy_series = _get_single_column(patient_df, "PatientID")
-        
-        # Load Step1 registry for mapping
-        try:
-            from contract_validator import ContractValidator
-            patient_file_path = Path(patient_data_file)
-            contracts_dir = patient_file_path.parent.parent / "contracts"
-            if not contracts_dir.exists():
-                contracts_dir = patient_file_path.parent / "contracts"
-            validator = ContractValidator(contracts_dir)
-            registry = validator.load_step1_registry()
-            
-            if registry is not None and 'AnonPatientID' in registry.columns and 'PrimaryPatientID' in registry.columns:
-                anon_to_primary = dict(zip(registry["AnonPatientID"], registry["PrimaryPatientID"]))
-            else:
-                anon_to_primary = {}
-        except Exception as e:
-            # Registry not available - will only work if PrimaryPatientID already exists
-            anon_to_primary = {}
-        
-        if pid_series is not None:
-            patient_df["PrimaryPatientID"] = pid_series.astype(str)
-        
-        elif legacy_series is not None:
-            legacy_series = legacy_series.astype(str)
-            
-            # Check if PT-style
-            if legacy_series.str.match(r"^PT\d+$").all():
-                patient_df["AnonPatientID"] = legacy_series
-                patient_df["PrimaryPatientID"] = patient_df["AnonPatientID"].map(anon_to_primary)
-            else:
-                patient_df["PrimaryPatientID"] = legacy_series
-        
-        else:
-            raise ValueError("Clinical file must contain PrimaryPatientID or PatientID")
-        
-        # Optional AnonPatientID
-        if anon_series is not None:
-            patient_df["AnonPatientID"] = anon_series.astype(str)
-        
-        # HARD VALIDATION
-        if patient_df["PrimaryPatientID"].isna().any():
-            bad = patient_df[patient_df["PrimaryPatientID"].isna()]
-            raise ValueError(
-                f"Unresolved PrimaryPatientID for {len(bad)} rows. "
-                "Check AnonPatientID ↔ registry mapping."
+        if not clinical_path.exists():
+            raise FileNotFoundError(
+                f"Clinical Contract v2 file not found: {clinical_file}\n"
+                "Run Step 0 (code0_clinical_reconciliation.py) first to generate clinical_reconciled.xlsx"
             )
         
-        # Normalize PrimaryPatientID for matching (identity-safe key)
-        if "PrimaryPatientID" in patient_df.columns:
-            patient_df["PrimaryPatientID_norm"] = patient_df["PrimaryPatientID"].apply(normalize_dvh_id)
-        else:
-            patient_df["PrimaryPatientID_norm"] = None
+        # Load clinical data from single source
+        clinical_df = pd.read_excel(clinical_file)
         
-        # Ensure required columns exist
-        if 'Observed_Toxicity' not in patient_df.columns:
+        # Normalize column names using utility function
+        patient_df = normalize_columns(clinical_df)
+        
+        # Validate only PatientID (Clinical Contract v2 mandatory field)
+        # Note: normalize_columns() converts 'patient_id' to 'PatientID'
+        if 'PatientID' not in patient_df.columns:
+            raise ValueError("Clinical Contract v2 violation: PatientID column missing after normalization")
+        
+        # Map xerostomia_grade2plus to Observed_Toxicity for compatibility
+        if 'xerostomia_grade2plus' in patient_df.columns:
+            patient_df['Observed_Toxicity'] = patient_df['xerostomia_grade2plus']
+        elif 'Observed_Toxicity' not in patient_df.columns:
             # Try to find toxicity column
             tox_cols = [c for c in patient_df.columns if 'toxicity' in c.lower() or 'tox' in c.lower()]
             if tox_cols:
@@ -2455,6 +2579,37 @@ def load_patient_data(patient_data_file):
             else:
                 print("Warning: No toxicity column found. Creating dummy column.")
                 patient_df['Observed_Toxicity'] = 0
+        
+        # Normalize patient_id for matching (identity-safe key)
+        # Note: DVH uses PrimaryPatientID, clinical uses PatientID (normalized from patient_id)
+        # Matching: DVH.PrimaryPatientID == clinical.PatientID
+        patient_df["patient_id_norm"] = patient_df["PatientID"].apply(normalize_dvh_id)
+        
+        # Map PatientID to PrimaryPatientID for DVH matching (internal use only)
+        # This allows us to match: DVH.PrimaryPatientID == clinical.PatientID
+        patient_df["PrimaryPatientID"] = patient_df["PatientID"]
+        patient_df["PrimaryPatientID_norm"] = patient_df["patient_id_norm"]
+        
+        # Try to get AnonPatientID from registry for display (optional)
+        try:
+            from contract_validator import ContractValidator
+            contracts_dir = Path(output_dir).parent / "contracts"
+            if not contracts_dir.exists():
+                contracts_dir = Path(output_dir) / "contracts"
+            validator = ContractValidator(contracts_dir)
+            registry = validator.load_step1_registry()
+            
+            if registry is not None and 'AnonPatientID' in registry.columns and 'PrimaryPatientID' in registry.columns:
+                mapping_df = registry[['PrimaryPatientID', 'AnonPatientID']].drop_duplicates()
+                patient_df = pd.merge(
+                    patient_df,
+                    mapping_df,
+                    on='PrimaryPatientID',
+                    how='left'
+                )
+        except Exception as e:
+            # Registry not available - AnonPatientID will be None
+            pass
         
         # Fill missing values with defaults
         if 'dose_per_fraction' not in patient_df.columns:
@@ -2479,25 +2634,27 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     
     # Initialize components
     dvh_processor = DVHProcessor(dvh_dir)
-    ntcp_calculator = NTCPCalculator()
+    ntcp_calc = NTCPCalculator()
     ml_models = MachineLearningModels()
     
-    # Load patient data
-    patient_df = load_patient_data(patient_data_file)
+    # Load patient data from Clinical Contract v2 reconciled file
+    # Note: patient_data_file parameter is kept for backward compatibility but not used
+    patient_df = load_patient_data(output_dir)
     if patient_df is None:
         return
     
-    print(f"Loaded {len(patient_df)} patient-organ combinations")
+    print(f"Loaded {len(patient_df)} patient-organ combinations from Clinical Contract v2")
     
-    # Identity-safe: PrimaryPatientID should already be set by load_patient_data()
-    # Validate that PrimaryPatientID exists
-    if 'PrimaryPatientID' not in patient_df.columns or patient_df['PrimaryPatientID'].isna().all():
-        raise ValueError("PrimaryPatientID is required for matching. Clinical data must contain PrimaryPatientID or PatientID that can be mapped.")
+    # Clinical Contract v2: PatientID is guaranteed by Step-0 (normalized from patient_id)
+    # Identity matching: DVH.PrimaryPatientID == clinical.PatientID
+    if 'PatientID' not in patient_df.columns:
+        raise ValueError("Clinical Contract v2 violation: PatientID column missing")
     
-    # Normalize PrimaryPatientID for matching
-    patient_df['PrimaryPatientID_norm'] = patient_df['PrimaryPatientID'].apply(normalize_dvh_id)
-    valid_primary_count = patient_df['PrimaryPatientID_norm'].notna().sum()
-    print(f"Using PrimaryPatientID for matching ({valid_primary_count}/{len(patient_df)} valid)")
+    # patient_id is already normalized in load_patient_data()
+    # PrimaryPatientID is mapped from patient_id for DVH matching
+    valid_patient_count = patient_df['patient_id_norm'].notna().sum() if 'patient_id_norm' in patient_df.columns else len(patient_df)
+    print(f"Using patient_id for matching (Clinical Contract v2: {valid_patient_count}/{len(patient_df)} valid)")
+    print(f"Identity matching: DVH.PrimaryPatientID == clinical.patient_id")
     
     # Get AnonPatientID for display (optional)
     has_anon = 'AnonPatientID' in patient_df.columns
@@ -2526,19 +2683,27 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     total_count = len(patient_df)
     
     for _, row in patient_df.iterrows():
-        primary_patient_id = row['PrimaryPatientID']
-        organ = row['Organ']
+        # Clinical Contract v2: use PatientID from clinical data (normalized from patient_id)
+        # Handle both normalized (PatientID) and original (patient_id) column names
+        patient_id = row.get('PatientID', row.get('patient_id', None))
+        if patient_id is None:
+            raise ValueError("Clinical Contract v2 violation: PatientID/patient_id not found in row")
+        # Map to PrimaryPatientID for DVH matching: DVH.PrimaryPatientID == clinical.PatientID
+        primary_patient_id = row.get('PrimaryPatientID', patient_id)  # Already mapped in load_patient_data()
+        
+        organ = row.get('Organ', None)  # Organ may not be in clinical data (per-patient, not per-organ)
         observed_toxicity = row['Observed_Toxicity']
         dose_per_fraction = row.get('dose_per_fraction', 2.0)
         anon_patient_id = row.get('AnonPatientID', None) if has_anon else None
         
-        # Display AnonPatientID if available, otherwise PrimaryPatientID
-        display_id = anon_patient_id if anon_patient_id else primary_patient_id
-        print(f"\nProcessing {display_id} - {organ}" + (f" (Primary: {primary_patient_id})" if anon_patient_id else ""))
+        # Display AnonPatientID if available, otherwise patient_id
+        display_id = anon_patient_id if anon_patient_id else patient_id
+        print(f"\nProcessing {display_id} - {organ if organ else 'N/A'}" + (f" (patient_id: {patient_id})" if anon_patient_id else ""))
         
-        # Load DVH data using PrimaryPatientID (identity-safe matching)
-        # DVH filenames now use PrimaryPatientID format: {PrimaryPatientID}_{Organ}.csv
-        primary_id_norm = row.get('PrimaryPatientID_norm')
+        # Load DVH data using PrimaryPatientID (mapped from patient_id)
+        # Identity matching: DVH.PrimaryPatientID == clinical.patient_id
+        # DVH filenames use PrimaryPatientID format: {PrimaryPatientID}_{Organ}.csv
+        primary_id_norm = row.get('PrimaryPatientID_norm', row.get('patient_id_norm'))
         patient_name = row.get('PatientName', '')
         dvh, extracted_patient_id = dvh_processor.load_dvh_file(
             primary_patient_id, organ, patient_name, dvh_id=primary_patient_id, dvh_id_norm=primary_id_norm
@@ -2559,8 +2724,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
             continue
         
         # Get organ-specific parameters
-        if organ in ntcp_calculator.literature_params:
-            lit_params = ntcp_calculator.literature_params[organ]
+        if organ in ntcp_calc.literature_params:
+            lit_params = ntcp_calc.literature_params[organ]
             a_param = lit_params['LKB_LogLogit']['a']
             n_param = lit_params['LKB_Probit']['n']
         else:
@@ -2581,13 +2746,15 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
         print(f"   gEUD (a={a_param}): {geud:.1f} Gy")
         
         # Calculate NTCP for traditional models
-        ntcp_results = ntcp_calculator.calculate_all_ntcp_models(
+        ntcp_results = ntcp_calc.calculate_all_ntcp_models(
             dvh, dose_metrics, organ, dose_per_fraction
         )
         
-        # Compile results - identity-safe: use PrimaryPatientID for matching, AnonPatientID for display
+        # Compile results - Clinical Contract v2: use patient_id from clinical data
+        # Identity matching: DVH.PrimaryPatientID == clinical.patient_id
         result_row = {
-            'PrimaryPatientID': primary_patient_id,  # REAL patient ID for matching (identity-safe key)
+            'patient_id': patient_id,  # Clinical Contract v2: patient_id from clinical data
+            'PrimaryPatientID': primary_patient_id,  # Mapped from patient_id for DVH matching (DVH uses PrimaryPatientID)
             'AnonPatientID': anon_patient_id if anon_patient_id and not pd.isna(anon_patient_id) else None,  # Anonymized ID for display only
             'Organ': organ,
             'Observed_Toxicity': observed_toxicity,
@@ -2605,8 +2772,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
             try:
                 untcp_calc = UncertaintyAwareNTCP()
                 # Get parameters for LKB_Probit
-                if organ in ntcp_calculator.literature_params:
-                    lit_params = ntcp_calculator.literature_params[organ]
+                if organ in ntcp_calc.literature_params:
+                    lit_params = ntcp_calc.literature_params[organ]
                     probit_params = lit_params.get('LKB_Probit', {})
                     if probit_params:
                         # Create wrapper function for LKB_Probit
@@ -2615,7 +2782,7 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                             TD50 = params_dict.get('TD50', probit_params.get('TD50', 50.0))
                             m = params_dict.get('m', probit_params.get('m', 0.2))
                             n = params_dict.get('n', probit_params.get('n', 0.5))
-                            return ntcp_calculator.ntcp_lkb_probit(dose_metrics, TD50, m, n)
+                            return ntcp_calc.ntcp_lkb_probit(dose_metrics, TD50, m, n)
                         
                         # Prepare params dict
                         untcp_params = {
@@ -2667,10 +2834,10 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
             result_row['ProbNTCP_CI_L'] = None
             result_row['ProbNTCP_CI_U'] = None
         
-        if MonteCarloNTCPModel is not None and organ in ntcp_calculator.literature_params:
+        if MonteCarloNTCPModel is not None and organ in ntcp_calc.literature_params:
             try:
                 mc_model = MonteCarloNTCPModel(organ)
-                lit_params = ntcp_calculator.literature_params[organ]
+                lit_params = ntcp_calc.literature_params[organ]
                 # Extract parameters for MC model
                 mc_params = {
                     'n': lit_params['LKB_Probit'].get('n', 0.5),
@@ -2702,6 +2869,165 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     
     # Convert to DataFrame
     results_df = pd.DataFrame(results)
+    
+    # ========================================================================
+    # LOCAL CLASSICAL CALIBRATION (NEW - Additive only)
+    # ========================================================================
+    # Fit local sigmoid curve to cohort data and compute locally calibrated
+    # LKB and RS models for fair comparison with ML
+    print("\n" + "="*60)
+    print("LOCAL CLASSICAL CALIBRATION")
+    print("="*60)
+    
+    try:
+        from ntcp_models.local_classical_calibration import (
+            fit_local_sigmoid, 
+            local_sigmoid_to_lkb, 
+            local_sigmoid_to_rs
+        )
+        
+        # Process each organ separately
+        for organ in sorted(results_df['Organ'].unique()):
+            organ_data = results_df[results_df['Organ'] == organ].copy()
+            
+            if len(organ_data) < 10:
+                print(f"  Skipping {organ}: insufficient data for local calibration (n={len(organ_data)})")
+                continue
+            
+            print(f"\n  Fitting local sigmoid for {organ} (n={len(organ_data)})...")
+            
+            # Use mean_dose as dose metric (already computed)
+            if 'mean_dose' not in organ_data.columns:
+                print(f"    Warning: mean_dose not available for {organ}, skipping local calibration")
+                continue
+            
+            # Prepare data
+            dose_metric = organ_data['mean_dose'].values
+            toxicity = organ_data['Observed_Toxicity'].values.astype(float)
+            
+            # Remove NaN values
+            valid_mask = ~(np.isnan(dose_metric) | np.isnan(toxicity))
+            dose_metric_clean = dose_metric[valid_mask]
+            toxicity_clean = toxicity[valid_mask]
+            
+            if len(dose_metric_clean) < 10:
+                print(f"    Warning: Insufficient valid data for {organ} ({len(dose_metric_clean)} samples)")
+                continue
+            
+            # Fit local sigmoid
+            try:
+                D50_local, k_local = fit_local_sigmoid(dose_metric_clean, toxicity_clean)
+                print(f"    Local sigmoid: D50={D50_local:.2f} Gy, k={k_local:.2f} Gy")
+                
+                # Convert to LKB parameters
+                TD50_local, m_local = local_sigmoid_to_lkb(D50_local, k_local)
+                print(f"    Local LKB: TD50={TD50_local:.2f} Gy, m={m_local:.3f}")
+                
+                # Convert to RS parameters
+                D50_rs_local, gamma_local = local_sigmoid_to_rs(D50_local, k_local)
+                print(f"    Local RS: D50={D50_rs_local:.2f} Gy, gamma={gamma_local:.3f}")
+                
+                # Compute local LKB and RS NTCP for all patients in organ
+                # Use existing NTCP calculator functions with local parameters
+                organ_indices = organ_data.index
+                ntcp_lkb_local = []
+                ntcp_rs_local = []
+                
+                for idx in organ_indices:
+                    row = results_df.loc[idx]
+                    
+                    # Get dose metrics for LKB (needs v_effective and max_dose)
+                    # Use mean_dose as approximation if v_effective not available
+                    dose_val = row.get('mean_dose', np.nan)
+                    v_effective = row.get('v_effective', 1.0)  # Default to 1.0 if not available
+                    max_dose = row.get('max_dose', dose_val)  # Use mean_dose as fallback
+                    
+                    if np.isnan(dose_val):
+                        ntcp_lkb_local.append(np.nan)
+                        ntcp_rs_local.append(np.nan)
+                        continue
+                    
+                    # Local LKB NTCP using existing LKB Probit function
+                    # Use n=1.0 (volume parameter unchanged from QUANTEC)
+                    try:
+                        dose_metrics_local = {
+                            'v_effective': v_effective,
+                            'max_dose': max_dose
+                        }
+                        ntcp_lkb = ntcp_calc.ntcp_lkb_probit(
+                            dose_metrics_local, 
+                            TD50_local, 
+                            m_local, 
+                            n=1.0
+                        )
+                        ntcp_lkb_local.append(ntcp_lkb)
+                    except:
+                        # Fallback: simplified LKB using mean dose
+                        from scipy.stats import norm
+                        t = (dose_val - TD50_local) / (m_local * TD50_local) if TD50_local > 0 else 0
+                        ntcp_lkb = norm.cdf(t)
+                        ntcp_lkb = np.clip(ntcp_lkb, 1e-10, 1 - 1e-10)
+                        ntcp_lkb_local.append(ntcp_lkb)
+                    
+                    # Local RS NTCP - need DVH for full RS calculation
+                    # For now, use simplified approximation with mean dose
+                    # In production, would load DVH and use ntcp_calculator.ntcp_rs_poisson()
+                    try:
+                        # Simplified RS: NTCP = 1 - exp(-exp(gamma * (D/D50 - 1)))
+                        dose_ratio = dose_val / D50_rs_local if D50_rs_local > 0 else 0
+                        ntcp_rs = 1.0 - np.exp(-np.exp(gamma_local * (dose_ratio - 1.0)))
+                        ntcp_rs = np.clip(ntcp_rs, 1e-10, 1 - 1e-10)
+                        ntcp_rs_local.append(ntcp_rs)
+                    except:
+                        ntcp_rs_local.append(np.nan)
+                
+                # Add to results DataFrame
+                results_df.loc[organ_indices, 'NTCP_LKB_LOCAL'] = ntcp_lkb_local
+                results_df.loc[organ_indices, 'NTCP_RS_LOCAL'] = ntcp_rs_local
+                
+                print(f"    Added local LKB and RS predictions for {organ}")
+                
+                # Save local parameters (will be exported to JSON later)
+                # Store in a module-level variable for later export
+                if not hasattr(process_all_patients, 'local_calibration_params'):
+                    process_all_patients.local_calibration_params = {}
+                
+                process_all_patients.local_calibration_params[organ] = {
+                    'organ': organ,
+                    'D50_local': float(D50_local),
+                    'k_local': float(k_local),
+                    'TD50_local': float(TD50_local),
+                    'm_local': float(m_local),
+                    'D50_rs_local': float(D50_rs_local),
+                    'gamma_local': float(gamma_local),
+                    'n_samples': int(len(dose_metric_clean))
+                }
+                
+            except Exception as e:
+                print(f"    Warning: Local calibration failed for {organ}: {e}")
+                # Add NaN columns to maintain structure
+                organ_indices = organ_data.index
+                results_df.loc[organ_indices, 'NTCP_LKB_LOCAL'] = np.nan
+                results_df.loc[organ_indices, 'NTCP_RS_LOCAL'] = np.nan
+        
+        print("\n" + "="*60)
+        
+    except ImportError as e:
+        print(f"  Warning: Local calibration module not available: {e}")
+        # Add empty columns to maintain structure
+        results_df['NTCP_LKB_LOCAL'] = np.nan
+        results_df['NTCP_RS_LOCAL'] = np.nan
+    except Exception as e:
+        print(f"  Warning: Local calibration failed: {e}")
+        # Add empty columns to maintain structure
+        if 'NTCP_LKB_LOCAL' not in results_df.columns:
+            results_df['NTCP_LKB_LOCAL'] = np.nan
+        if 'NTCP_RS_LOCAL' not in results_df.columns:
+            results_df['NTCP_RS_LOCAL'] = np.nan
+    
+    # ========================================================================
+    # END LOCAL CLASSICAL CALIBRATION
+    # ========================================================================
     
     # Calculate match rate (successful matches / total attempts) - identity-safe
     matched_cases = len(results_df) if not results_df.empty else 0
@@ -2935,7 +3261,7 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     print(f"\n Creating Comprehensive Publication-Ready Plots")
     print("=" * 55)
     
-    plotter = ComprehensivePlotter(output_path / 'plots', ntcp_calculator)
+    plotter = ComprehensivePlotter(output_path / 'plots', ntcp_calc)
     
     # Multi-OAR safety: always use sorted organ list
     for organ in sorted(results_df['Organ'].unique()):
@@ -2944,7 +3270,9 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
         print(f"\n Creating plots for {organ}...")
         
         # Individual plots for each organ
-        plotter.create_dose_response_plot(organ_data, organ)
+        # Disabled: duplicate dose-response plot (gEUD-based)
+        # Biological dose-response refit (mean dose-based) is handled in Step 1.5
+        # plotter.create_dose_response_plot(organ_data, organ)
         plotter.create_roc_plot(organ_data, organ)
         plotter.create_calibration_plot(organ_data, organ)
         plotter.create_combined_roc_calibration_plot(organ_data, organ)
@@ -2954,6 +3282,17 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     plotter.create_comprehensive_analysis_plot(results_df)
     plotter.create_model_performance_plot(results_df)
     plotter.create_overall_performance_plot(results_df)
+    
+    # Export local classical calibration parameters (NEW - additive)
+    try:
+        if hasattr(process_all_patients, 'local_calibration_params') and process_all_patients.local_calibration_params:
+            import json
+            params_file = Path(output_dir) / 'local_classical_parameters.json'
+            with open(params_file, 'w') as f:
+                json.dump(process_all_patients.local_calibration_params, f, indent=2)
+            print(f"\n[LOCAL CALIBRATION] Parameters saved to: {params_file}")
+    except Exception as e:
+        print(f"Warning: Could not export local calibration parameters: {e}")
     
     print(f"Processed {len(results_df)} valid patient-organ DVHs")
     return results_df
@@ -2976,7 +3315,7 @@ def create_enhanced_summary_report(results_df, output_dir):
         # Get all model performance
         model_performance = {}
         
-        # Traditional NTCP models
+        # Traditional NTCP models (QUANTEC)
         for model in ['LKB_LogLogit', 'LKB_Probit', 'RS_Poisson']:
             ntcp_col = f'NTCP_{model}'
             if ntcp_col in organ_data.columns:
@@ -2985,9 +3324,22 @@ def create_enhanced_summary_report(results_df, output_dir):
                     try:
                         fpr, tpr, _ = roc_curve(valid_data['Observed_Toxicity'], valid_data[ntcp_col])
                         auc_score = auc(fpr, tpr)
-                        model_performance[model] = auc_score
+                        model_performance[f'QUANTEC-{model}'] = auc_score
                     except:
-                        model_performance[model] = np.nan
+                        model_performance[f'QUANTEC-{model}'] = np.nan
+        
+        # Local classical models (NEW - additive)
+        for model in ['LKB_LOCAL', 'RS_LOCAL']:
+            ntcp_col = f'NTCP_{model}'
+            if ntcp_col in organ_data.columns:
+                valid_data = organ_data.dropna(subset=[ntcp_col, 'Observed_Toxicity'])
+                if len(valid_data) >= 5:
+                    try:
+                        fpr, tpr, _ = roc_curve(valid_data['Observed_Toxicity'], valid_data[ntcp_col])
+                        auc_score = auc(fpr, tpr)
+                        model_performance[f'Local-{model.replace("_LOCAL", "")}'] = auc_score
+                    except:
+                        model_performance[f'Local-{model.replace("_LOCAL", "")}'] = np.nan
         
         # ML models
         ml_cols = [col for col in organ_data.columns if col.startswith('NTCP_ML_')]
@@ -3253,11 +3605,14 @@ def get_clinical_recommendation(best_auc, n_events, ml_models):
 def main():
     """Enhanced main execution function"""
     
+    # --- SAFETY FIX: protect Path from shadowing ---
+    Path = _Path
+    
     parser = argparse.ArgumentParser(description='Enhanced NTCP Analysis: Traditional + ML Models')
     parser.add_argument('--dvh_dir', default='dDVH_csv', 
                        help='Directory containing DVH CSV files (default: dDVH_csv)')
-    parser.add_argument('--patient_data', default='ntcp_results.xlsx',
-                       help='Patient data file with outcomes (default: ntcp_results.xlsx)')
+    parser.add_argument('--patient_data', default=None,
+                       help='[DEPRECATED] Patient data file - now loaded from code0_output/clinical_reconciled.xlsx (Clinical Contract v2)')
     parser.add_argument('--output_dir', default='enhanced_ntcp_analysis',
                        help='Output directory (default: enhanced_ntcp_analysis)')
     parser.add_argument('--ml_models', action='store_true', default=True,
@@ -3277,15 +3632,14 @@ def main():
     
     # Validate input paths
     dvh_path = Path(args.dvh_dir)
-    patient_file = Path(args.patient_data)
+    output_path = Path(args.output_dir)
     
     if not dvh_path.exists():
         print(f"Error: Error: DVH directory '{dvh_path}' not found")
         return
     
-    if not patient_file.exists():
-        print(f"Error: Error: Patient data file '{patient_file}' not found")
-        return
+    # Clinical Contract v2: patient data is loaded from code0_output/clinical_reconciled.xlsx
+    # This is validated in load_patient_data()
     
     # Check for DVH files
     dvh_files = list(dvh_path.glob('*.csv'))
@@ -3294,7 +3648,7 @@ def main():
         return
     
     print(f" Found {len(dvh_files)} DVH files in {dvh_path}")
-    print(f" Patient data file: {patient_file}")
+    print(f" Clinical data: code0_output/clinical_reconciled.xlsx (Clinical Contract v2)")
     
     # Check XGBoost availability
     if XGBOOST_AVAILABLE:
@@ -3302,10 +3656,19 @@ def main():
     else:
         print("Warning: XGBoost not available - only ANN will be used")
     
+    # ---------------------------------------------------------
+    # Ensure ntcp_calc is defined at function scope
+    # ---------------------------------------------------------
+    ntcp_calc = None
+    
+    # Initialize NTCPCalculator for use throughout main()
+    ntcp_calc = NTCPCalculator()
+    
     try:
         # Step 1: Enhanced processing with traditional + ML models
         print("\n[MODEL] Step 1: Enhanced DVH processing and model training...")
-        results_df = process_all_patients(args.dvh_dir, args.patient_data, args.output_dir)
+        # Clinical Contract v2: patient_data parameter is ignored, loaded from code0_output/clinical_reconciled.xlsx
+        results_df = process_all_patients(args.dvh_dir, None, args.output_dir)
         
         if results_df is None or len(results_df) == 0:
             print("Error: No data processed. Please check file formats and patient IDs.")
@@ -3320,6 +3683,787 @@ def main():
         
         print(f" Traditional NTCP models: {len(traditional_models)}")
         print(f" ML models trained: {len(ml_models)}")
+        
+        # Step 1.5: Biological dose–response refitting (separate from calibration)
+        try:
+            print("\n[MODEL] Step 1.5: Biological dose–response refitting...")
+            from biological_refitting import refit_all_organs
+            
+            # Load config file if it exists
+            config_path = Path('py_ntcpx_config/local_refit_bounds.json')
+            if not config_path.exists():
+                print(f"  Warning: Config file not found: {config_path}, using defaults")
+                config_path = None
+            
+            # Safety check: ensure we're using binary events, not calibrated probabilities
+            # Add refit_source column to mark that we're using clinical events
+            if 'Observed_Toxicity' in results_df.columns:
+                results_df['refit_source'] = 'clinical_events'
+            elif 'event' in results_df.columns:
+                results_df['refit_source'] = 'clinical_events'
+            else:
+                # Check if we have any probability columns that might be mistakenly used
+                prob_cols = [col for col in results_df.columns if 'calibrated' in col.lower() or 'probability' in col.lower()]
+                if prob_cols:
+                    raise ValueError(f"ERROR: No binary event column found. Found probability columns: {prob_cols}. "
+                                  f"Biological refit requires binary events (0/1) from clinical outcomes, "
+                                  f"NOT calibrated probabilities.")
+                else:
+                    raise ValueError("ERROR: No binary event column (Observed_Toxicity or event) found for biological refit.")
+            
+            # Assert that event column is integer/binary
+            event_col = 'Observed_Toxicity' if 'Observed_Toxicity' in results_df.columns else 'event'
+            if not results_df[event_col].dtype in [np.int64, np.int32, int]:
+                # Try to convert
+                try:
+                    results_df[event_col] = results_df[event_col].astype(int)
+                except:
+                    raise ValueError(f"ERROR: Event column '{event_col}' must be integer binary (0/1), "
+                                   f"not probabilities. Found dtype: {results_df[event_col].dtype}")
+            
+            # Ensure values are 0/1
+            unique_vals = results_df[event_col].dropna().unique()
+            if not all(v in [0, 1] for v in unique_vals):
+                raise ValueError(f"ERROR: Event column '{event_col}' must contain only 0 and 1 values. "
+                               f"Found values: {unique_vals}")
+            
+            refit_all_organs(results_df, args.output_dir, n_bootstrap=1000, config_path=str(config_path) if config_path else None)
+            print("  [OK] Biological refitting completed")
+        except ImportError:
+            print("  Warning: biological_refitting module not available, skipping biological refitting")
+        except Exception as e:
+            print(f"  Warning: Biological refitting failed: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Publication-quality dose-response plots (Framework 1 & 2)
+        GENERATE_PUBLICATION_DR_PLOTS = True
+        if GENERATE_PUBLICATION_DR_PLOTS:
+            # Defensive assertion: ensure ntcp_calc is initialized
+            if ntcp_calc is None:
+                raise RuntimeError("ntcp_calc was not initialized before DR plotting.")
+            
+            print("\n[PLOT] Generating publication-quality dose-response figures...")
+            try:
+                from pathlib import Path
+                import json
+                from scipy.special import expit
+                
+                plots_dir = Path(args.output_dir) / 'plots'
+                plots_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Load refitted parameters if available
+                bio_params_file = Path(args.output_dir) / 'local_biological_parameters.json'
+                classical_params_file = Path(args.output_dir) / 'local_classical_parameters.json'
+                
+                bio_params = {}
+                classical_params = {}
+                
+                if bio_params_file.exists():
+                    with open(bio_params_file, 'r') as f:
+                        bio_params = json.load(f)
+                
+                if classical_params_file.exists():
+                    with open(classical_params_file, 'r') as f:
+                        classical_params = json.load(f)
+                
+                # Process each organ
+                for organ in sorted(results_df['Organ'].unique()):
+                    organ_data = results_df[results_df['Organ'] == organ].copy()
+                    
+                    # Filter valid data
+                    valid_mask = (
+                        organ_data['gEUD'].notna() &
+                        (organ_data['gEUD'] > 0) &
+                        organ_data['mean_dose'].notna() &
+                        (organ_data['mean_dose'] > 0) &
+                        organ_data['Observed_Toxicity'].notna()
+                    )
+                    organ_data_valid = organ_data[valid_mask].copy()
+                    
+                    if len(organ_data_valid) < 5:
+                        print(f"  Skipping {organ}: insufficient data")
+                        continue
+                    
+                    # Extract data
+                    geud_vals = organ_data_valid['gEUD'].values
+                    mean_dose_vals = organ_data_valid['mean_dose'].values
+                    ntcp_obs = organ_data_valid['Observed_Toxicity'].values.astype(float)
+                    
+                    # Get NTCP predictions
+                    ntcp_lkb_loglogit_pred = organ_data_valid['NTCP_LKB_LogLogit'].values if 'NTCP_LKB_LogLogit' in organ_data_valid.columns else np.array([])
+                    ntcp_lkb_probit_pred = organ_data_valid['NTCP_LKB_Probit'].values if 'NTCP_LKB_Probit' in organ_data_valid.columns else np.array([])
+                    ntcp_rs_pred = organ_data_valid['NTCP_RS_Poisson'].values if 'NTCP_RS_Poisson' in organ_data_valid.columns else np.array([])
+                    ntcp_ann_pred = organ_data_valid['NTCP_ML_ANN'].values if 'NTCP_ML_ANN' in organ_data_valid.columns else np.array([])
+                    ntcp_xgb_pred = organ_data_valid['NTCP_ML_XGBoost'].values if 'NTCP_ML_XGBoost' in organ_data_valid.columns else np.array([])
+                    
+                    # Get refitted parameters for classical models
+                    lkb_loglogit_params = None
+                    lkb_probit_params = None
+                    rs_poisson_params = None
+                    bio_logistic_params = None
+                    
+                    if organ in classical_params:
+                        if classical_params[organ].get('LKB_LogLogit') and classical_params[organ]['LKB_LogLogit']:
+                            lkb_loglogit_params = classical_params[organ]['LKB_LogLogit'].get('point_estimate')
+                        if classical_params[organ].get('LKB_Probit') and classical_params[organ]['LKB_Probit']:
+                            lkb_probit_params = classical_params[organ]['LKB_Probit'].get('point_estimate')
+                        if classical_params[organ].get('RS_Poisson') and classical_params[organ]['RS_Poisson']:
+                            rs_poisson_params = classical_params[organ]['RS_Poisson'].get('point_estimate')
+                    
+                    if organ in bio_params:
+                        if bio_params[organ].get('Logistic') and bio_params[organ]['Logistic']:
+                            bio_logistic_params = bio_params[organ]['Logistic'].get('point_estimate')
+                    
+                    # Get literature parameters as fallback
+                    if organ in ntcp_calc.literature_params:
+                        lit_params = ntcp_calc.literature_params[organ]
+                    else:
+                        lit_params = None
+                    
+                    # FIGURE 1: LKB Dose-Response (gEUD axis)
+                    if lkb_loglogit_params or lkb_probit_params or lit_params:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(max(0.1, geud_vals.min() * 0.8), geud_vals.max() * 1.2, 300)
+                        
+                        # LKB Log-logit curve
+                        if lkb_loglogit_params:
+                            td50 = lkb_loglogit_params['TD50']
+                            gamma50 = lkb_loglogit_params['gamma50']
+                            ntcp_lkb_loglogit = 1.0 / (1.0 + np.power(td50 / np.maximum(x, 1e-6), gamma50))
+                        elif lit_params and 'LKB_LogLogit' in lit_params:
+                            td50 = lit_params['LKB_LogLogit']['TD50']
+                            gamma50 = lit_params['LKB_LogLogit']['gamma50']
+                            # Convert to EQD2 if needed
+                            eqd2_x = ntcp_calc.convert_to_eqd2(x, lit_params['LKB_LogLogit'].get('alpha_beta', 3), 2.0)
+                            ntcp_lkb_loglogit = ntcp_calc.ntcp_lkb_loglogit(eqd2_x, td50, gamma50)
+                        else:
+                            ntcp_lkb_loglogit = None
+                        
+                        if ntcp_lkb_loglogit is not None:
+                            ax.plot(x, ntcp_lkb_loglogit, color="#1f77b4", lw=3.0, label="LKB (Log-logit)")
+                            ax.scatter(geud_vals, ntcp_obs, facecolors="none", edgecolors="#1f77b4",
+                                     s=55, lw=1.8, alpha=0.9, zorder=5)
+                        
+                        # LKB Probit curve
+                        if lkb_probit_params:
+                            td50 = lkb_probit_params['TD50']
+                            m = lkb_probit_params['m']
+                            t = (x - td50) / (m * td50)
+                            ntcp_lkb_probit = norm.cdf(t)
+                        elif lit_params and 'LKB_Probit' in lit_params:
+                            td50 = lit_params['LKB_Probit']['TD50']
+                            m = lit_params['LKB_Probit']['m']
+                            n = lit_params['LKB_Probit'].get('n', 0.5)
+                            # Use dose metrics for probit
+                            dose_metrics_dict = {'gEUD': x, 'mean_dose': x, 'max_dose': x * 1.1}
+                            ntcp_lkb_probit = ntcp_calc.ntcp_lkb_probit(dose_metrics_dict, td50, m, n)
+                        else:
+                            ntcp_lkb_probit = None
+                        
+                        if ntcp_lkb_probit is not None:
+                            ax.plot(x, ntcp_lkb_probit, color="#d62728", lw=3.0, ls="--", label="LKB (Probit)")
+                            ax.scatter(geud_vals, ntcp_obs, marker="s", facecolors="none", edgecolors="#d62728",
+                                     s=55, lw=1.8, alpha=0.9, zorder=5)
+                        
+                        ax.set_xlabel(f"{organ} gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_xlim(left=0)
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, which="major", alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        plt.tight_layout()
+                        plt.savefig(plots_dir / f"Figure1_LKB_gEUD_DR_{organ}.png", dpi=1200)
+                        plt.savefig(plots_dir / f"Figure1_LKB_gEUD_DR_{organ}.svg")
+                        plt.close()
+                        print(f"    Saved Figure1_LKB_gEUD_DR_{organ}.png")
+                    
+                    # FIGURE 2: RS Poisson Dose-Response (gEUD axis)
+                    if rs_poisson_params or (lit_params and 'RS_Poisson' in lit_params):
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(max(0.1, geud_vals.min() * 0.8), geud_vals.max() * 1.2, 300)
+                        
+                        if rs_poisson_params:
+                            d50 = rs_poisson_params['D50']
+                            gamma = rs_poisson_params['gamma']
+                            dose_ratio = x / d50
+                            ntcp_rs_poisson = 1.0 - np.exp(-np.power(dose_ratio, gamma))
+                        elif lit_params and 'RS_Poisson' in lit_params:
+                            d50 = lit_params['RS_Poisson']['D50']
+                            gamma = lit_params['RS_Poisson']['gamma']
+                            s = lit_params['RS_Poisson'].get('s', 0.01)
+                            # Use DVH for RS Poisson (simplified: use gEUD as scalar)
+                            dummy_dvh = np.column_stack([x, np.ones_like(x)])  # Simplified DVH
+                            ntcp_rs_poisson = ntcp_calc.ntcp_rs_poisson(dummy_dvh, d50, gamma, s)
+                        else:
+                            ntcp_rs_poisson = None
+                        
+                        if ntcp_rs_poisson is not None:
+                            ax.plot(x, ntcp_rs_poisson, color="#f0ad1a", lw=3.0, ls="-.",
+                                  label="RS Poisson")
+                            ax.scatter(geud_vals, ntcp_obs, marker="^", facecolors="none",
+                                     edgecolors="#f0ad1a", s=65, lw=1.8, zorder=5)
+                        
+                        ax.set_xlabel(f"{organ} gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        plt.tight_layout()
+                        plt.savefig(plots_dir / f"Figure2_RS_gEUD_DR_{organ}.png", dpi=1200)
+                        plt.savefig(plots_dir / f"Figure2_RS_gEUD_DR_{organ}.svg")
+                        plt.close()
+                        print(f"    Saved Figure2_RS_gEUD_DR_{organ}.png")
+                    
+                    # FIGURE 3: Biological Logistic Dose-Response (Mean Dose)
+                    if bio_logistic_params:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(max(0.1, mean_dose_vals.min() * 0.8), mean_dose_vals.max() * 1.2, 300)
+                        
+                        td50_bio = bio_logistic_params['TD50']
+                        k_bio = bio_logistic_params['k']
+                        ntcp_biological = expit((x - td50_bio) / k_bio)
+                        
+                        ax.plot(x, ntcp_biological, color="#2c3e50", lw=3.5, label="Biological logistic")
+                        ax.scatter(mean_dose_vals, ntcp_obs, color="gray", alpha=0.65, s=45, zorder=2)
+                        ax.axvline(td50_bio, color="#7f7f7f", lw=2.0, ls=":", label="TD50")
+                        
+                        ax.set_xlabel(f"Mean {organ.lower()} dose (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        plt.tight_layout()
+                        plt.savefig(plots_dir / f"Figure3_Biological_MeanDose_DR_{organ}.png", dpi=1200)
+                        plt.savefig(plots_dir / f"Figure3_Biological_MeanDose_DR_{organ}.svg")
+                        plt.close()
+                        print(f"    Saved Figure3_Biological_MeanDose_DR_{organ}.png")
+                    
+                    # FIGURE 4: Predicted NTCP vs gEUD (All Models) - Prediction comparison
+                    if len(ntcp_lkb_loglogit_pred) > 0 or len(ntcp_lkb_probit_pred) > 0:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        # All arrays are already aligned from organ_data_valid
+                        if len(ntcp_lkb_loglogit_pred) > 0 and len(ntcp_lkb_loglogit_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_lkb_loglogit_pred,
+                                     s=40, alpha=0.6, label="LKB Log-logit")
+                        if len(ntcp_lkb_probit_pred) > 0 and len(ntcp_lkb_probit_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_lkb_probit_pred,
+                                     s=40, alpha=0.6, label="LKB Probit")
+                        if len(ntcp_rs_pred) > 0 and len(ntcp_rs_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_rs_pred,
+                                     s=40, alpha=0.6, label="RS Poisson")
+                        if len(ntcp_ann_pred) > 0 and len(ntcp_ann_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_ann_pred,
+                                     s=40, alpha=0.6, label="ANN")
+                        if len(ntcp_xgb_pred) > 0 and len(ntcp_xgb_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_xgb_pred,
+                                     s=40, alpha=0.6, label="XGBoost")
+                        
+                        ax.set_xlabel(f"{organ} gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=10, frameon=True, ncol=2)
+                        plt.tight_layout()
+                        plt.savefig(plots_dir / f"Figure4_Predicted_NTCP_Comparison_{organ}.png", dpi=1200)
+                        plt.savefig(plots_dir / f"Figure4_Predicted_NTCP_Comparison_{organ}.svg")
+                        plt.close()
+                        print(f"    Saved Figure4_Predicted_NTCP_Comparison_{organ}.png")
+                    
+                    # FIGURE 5: Observed vs Predicted NTCP (Calibration-style)
+                    if len(ntcp_obs) > 0:
+                        fig, ax = plt.subplots(figsize=(6.5, 6.5))
+                        
+                        # All arrays are already aligned from organ_data_valid
+                        if len(ntcp_lkb_loglogit_pred) > 0 and len(ntcp_lkb_loglogit_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_lkb_loglogit_pred,
+                                     label="LKB Log-logit", alpha=0.6)
+                        if len(ntcp_ann_pred) > 0 and len(ntcp_ann_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_ann_pred,
+                                     label="ANN", alpha=0.6)
+                        if len(ntcp_lkb_probit_pred) > 0 and len(ntcp_lkb_probit_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_lkb_probit_pred,
+                                     label="LKB Probit", alpha=0.6)
+                        if len(ntcp_rs_pred) > 0 and len(ntcp_rs_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_rs_pred,
+                                     label="RS Poisson", alpha=0.6)
+                        
+                        ax.plot([0, 1], [0, 1], 'k--', lw=1.5, label="Perfect calibration")
+                        ax.set_xlabel("Observed toxicity", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
+                        ax.set_xlim(0, 1)
+                        ax.set_ylim(0, 1)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=11)
+                        plt.tight_layout()
+                        plt.savefig(plots_dir / f"Figure5_Observed_vs_Predicted_{organ}.png", dpi=1200)
+                        plt.savefig(plots_dir / f"Figure5_Observed_vs_Predicted_{organ}.svg")
+                        plt.close()
+                        print(f"    Saved Figure5_Observed_vs_Predicted_{organ}.png")
+                
+                print("  [OK] Publication dose-response figures generated")
+            except Exception as e:
+                print(f"  Warning: Publication plotting failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # ============================================================
+        # REFERENCE-STYLE DR FIGURE (FIGURE 4) - MANUSCRIPT MATERIALS
+        # ============================================================
+        
+        def generate_reference_style_DR_figure(results_df, output_dir, ntcp_calc):
+            """
+            Generate reference-style dose-response figure (Figure 4) for manuscript.
+            Combines all three classical models (LKB Log-logit, LKB Probit, RS Poisson) on one plot.
+            Uses smooth model curves + hollow data markers matching reference aesthetic.
+            """
+            try:
+                # Load refitted parameters if available
+                bio_params_file = Path(output_dir) / 'local_biological_parameters.json'
+                classical_params_file = Path(output_dir) / 'local_classical_parameters.json'
+                
+                bio_params = {}
+                classical_params = {}
+                
+                if bio_params_file.exists():
+                    import json
+                    with open(bio_params_file, 'r') as f:
+                        bio_params = json.load(f)
+                
+                if classical_params_file.exists():
+                    import json
+                    with open(classical_params_file, 'r') as f:
+                        classical_params = json.load(f)
+                
+                # Find first organ with sufficient data and classical models
+                organ_for_dr = None
+                organ_data_valid = None
+                gEUD = None
+                y_obs = None
+                ntcp_lkb_loglogit_func = None
+                ntcp_lkb_probit_func = None
+                ntcp_rs_poisson_func = None
+                
+                for organ in sorted(results_df['Organ'].unique()):
+                    organ_data = results_df[results_df['Organ'] == organ].copy()
+                    
+                    valid_mask = (
+                        organ_data['gEUD'].notna() &
+                        (organ_data['gEUD'] > 0) &
+                        organ_data['Observed_Toxicity'].notna()
+                    )
+                    organ_data_valid = organ_data[valid_mask].copy()
+                    
+                    if len(organ_data_valid) < 5:
+                        continue
+                    
+                    # Check if we have classical models
+                    has_classical = (
+                        'NTCP_LKB_LogLogit' in organ_data_valid.columns or
+                        'NTCP_LKB_Probit' in organ_data_valid.columns or
+                        'NTCP_RS_Poisson' in organ_data_valid.columns
+                    )
+                    
+                    if has_classical:
+                        organ_for_dr = organ
+                        gEUD = organ_data_valid['gEUD'].values
+                        y_obs = organ_data_valid['Observed_Toxicity'].values.astype(int)
+                        break
+                
+                if organ_for_dr is None or gEUD is None or y_obs is None:
+                    print("  Warning: No organ with sufficient data for reference DR figure")
+                    return
+                
+                # Create model functions from refitted parameters or literature
+                # LKB Log-logit
+                if organ_for_dr in classical_params and classical_params[organ_for_dr].get('LKB_LogLogit'):
+                    params = classical_params[organ_for_dr]['LKB_LogLogit'].get('point_estimate', {})
+                    if params:
+                        td50 = params.get('TD50')
+                        gamma50 = params.get('gamma50')
+                        if td50 and gamma50:
+                            ntcp_lkb_loglogit_func = lambda x: 1.0 / (1.0 + np.power(td50 / np.maximum(x, 1e-6), 4.0 * gamma50))
+                            lkb_loglogit_label = f"LKB (Log-logit) [TD₅₀={td50:.1f} Gy, γ₅₀={gamma50:.2f}]"
+                elif organ_for_dr in ntcp_calc.literature_params and 'LKB_LogLogit' in ntcp_calc.literature_params[organ_for_dr]:
+                    lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_LogLogit']
+                    td50 = lit_params['TD50']
+                    gamma50 = lit_params['gamma50']
+                    alpha_beta = lit_params.get('alpha_beta', 3)
+                    ntcp_lkb_loglogit_func = lambda x: ntcp_calc.ntcp_lkb_loglogit(
+                        ntcp_calc.convert_to_eqd2(x, alpha_beta, 2.0), td50, gamma50
+                    )
+                    lkb_loglogit_label = f"LKB (Log-logit) [TD₅₀={td50:.1f} Gy, γ₅₀={gamma50:.2f}]"
+                
+                # LKB Probit
+                if organ_for_dr in classical_params and classical_params[organ_for_dr].get('LKB_Probit'):
+                    params = classical_params[organ_for_dr]['LKB_Probit'].get('point_estimate', {})
+                    if params:
+                        td50 = params.get('TD50')
+                        m = params.get('m')
+                        if td50 and m:
+                            ntcp_lkb_probit_func = lambda x: norm.cdf((x - td50) / (m * td50))
+                            lkb_probit_label = f"LKB (Probit) [TD₅₀={td50:.1f} Gy, m={m:.2f}]"
+                elif organ_for_dr in ntcp_calc.literature_params and 'LKB_Probit' in ntcp_calc.literature_params[organ_for_dr]:
+                    lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_Probit']
+                    td50 = lit_params['TD50']
+                    m = lit_params['m']
+                    ntcp_lkb_probit_func = lambda x: norm.cdf((x - td50) / (m * td50))
+                    lkb_probit_label = f"LKB (Probit) [TD₅₀={td50:.1f} Gy, m={m:.2f}]"
+                
+                # RS Poisson
+                if organ_for_dr in classical_params and classical_params[organ_for_dr].get('RS_Poisson'):
+                    params = classical_params[organ_for_dr]['RS_Poisson'].get('point_estimate', {})
+                    if params:
+                        d50 = params.get('D50')
+                        gamma = params.get('gamma')
+                        if d50 and gamma:
+                            ntcp_rs_poisson_func = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                            rs_poisson_label = f"RS Poisson [D₅₀={d50:.1f} Gy, γ={gamma:.2f}]"
+                elif organ_for_dr in ntcp_calc.literature_params and 'RS_Poisson' in ntcp_calc.literature_params[organ_for_dr]:
+                    lit_params = ntcp_calc.literature_params[organ_for_dr]['RS_Poisson']
+                    d50 = lit_params['D50']
+                    gamma = lit_params['gamma']
+                    ntcp_rs_poisson_func = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                    rs_poisson_label = f"RS Poisson [D₅₀={d50:.1f} Gy, γ={gamma:.2f}]"
+                
+                # Generate figure if at least one model is available
+                if ntcp_lkb_loglogit_func is None and ntcp_lkb_probit_func is None and ntcp_rs_poisson_func is None:
+                    print("  Warning: No classical models available for reference DR figure")
+                    return
+                
+                # Create figure with exact reference formatting
+                fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                
+                x = np.linspace(gEUD.min(), gEUD.max(), 400)
+                
+                # Plot curves with exact formatting
+                if ntcp_lkb_loglogit_func is not None:
+                    ax.plot(x, ntcp_lkb_loglogit_func(x),
+                            color="#1f77b4", lw=3.5, label=lkb_loglogit_label)
+                    ax.scatter(gEUD, y_obs,
+                               facecolors="none", edgecolors="#1f77b4",
+                               s=60, lw=1.6, alpha=0.9, zorder=5)
+                
+                if ntcp_lkb_probit_func is not None:
+                    ax.plot(x, ntcp_lkb_probit_func(x),
+                            color="#d62728", lw=3.5, ls="--", label=lkb_probit_label)
+                    ax.scatter(gEUD, y_obs,
+                               marker="s", facecolors="none", edgecolors="#d62728",
+                               s=60, lw=1.6, alpha=0.9, zorder=5)
+                
+                if ntcp_rs_poisson_func is not None:
+                    ax.plot(x, ntcp_rs_poisson_func(x),
+                            color="#f0ad1a", lw=3.5, ls="-.", label=rs_poisson_label)
+                    ax.scatter(gEUD, y_obs,
+                               marker="^", facecolors="none", edgecolors="#f0ad1a",
+                               s=60, lw=1.6, alpha=0.9, zorder=5)
+                
+                # Axes formatting
+                ax.set_xlabel("gEUD (Gy)", fontsize=14, fontweight="bold")
+                ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                ax.set_ylim(0, 1.02)
+                ax.grid(True, which="major", alpha=0.25)
+                ax.legend(fontsize=11, frameon=True, loc="lower right")
+                
+                plt.tight_layout()
+                
+                # Save to manuscript_materials
+                manuscript_dir = Path(output_dir) / 'manuscript_materials' / 'figures'
+                manuscript_dir.mkdir(parents=True, exist_ok=True)
+                
+                plt.savefig(manuscript_dir / "Figure4_DR_Reference.png", dpi=1200)
+                plt.savefig(manuscript_dir / "Figure4_DR_Reference.svg")
+                plt.close()
+                
+                print(f"  [OK] Reference-style DR figure (Figure 4) saved to manuscript_materials/figures/")
+                
+            except Exception as e:
+                print(f"  Warning: Reference-style DR figure generation failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Generate reference-style DR figure
+        if GENERATE_PUBLICATION_DR_PLOTS:
+            try:
+                generate_reference_style_DR_figure(results_df, args.output_dir, ntcp_calc)
+            except Exception as e:
+                print(f"  Warning: Reference DR figure generation failed: {e}")
+        
+        # ============================================================
+        # PUBLICATION-GRADE DOSE–RESPONSE PLOTS (MODEL-NATIVE)
+        # ============================================================
+        
+        if GENERATE_PUBLICATION_DR_PLOTS:
+            try:
+                print("\n[PLOT] Generating model-native dose-response plots...")
+                import json
+                from scipy.special import expit
+                
+                # Find first organ with sufficient data and refitted parameters
+                organ_for_dr = None
+                organ_data_valid = None
+                gEUD = None
+                mean_dose = None
+                ntcp_obs = None
+                ntcp_lkb_loglogit_pred = None
+                ntcp_lkb_probit_pred = None
+                ntcp_rs_pred = None
+                ntcp_ann_pred = None
+                ntcp_xgb_pred = None
+                TD50_bio = None
+                
+                # Get refitted parameters
+                bio_params_file = Path(args.output_dir) / 'local_biological_parameters.json'
+                classical_params_file = Path(args.output_dir) / 'local_classical_parameters.json'
+                
+                bio_params = {}
+                classical_params = {}
+                
+                if bio_params_file.exists():
+                    with open(bio_params_file, 'r') as f:
+                        bio_params = json.load(f)
+                
+                if classical_params_file.exists():
+                    with open(classical_params_file, 'r') as f:
+                        classical_params = json.load(f)
+                
+                # Find first organ with sufficient data
+                for organ in sorted(results_df['Organ'].unique()):
+                    organ_data = results_df[results_df['Organ'] == organ].copy()
+                    
+                    valid_mask = (
+                        organ_data['gEUD'].notna() &
+                        (organ_data['gEUD'] > 0) &
+                        organ_data['mean_dose'].notna() &
+                        (organ_data['mean_dose'] > 0) &
+                        organ_data['Observed_Toxicity'].notna()
+                    )
+                    organ_data_valid = organ_data[valid_mask].copy()
+                    
+                    if len(organ_data_valid) < 5:
+                        continue
+                    
+                    # Check if we have refitted parameters for this organ
+                    has_classical = organ in classical_params and (
+                        classical_params[organ].get('LKB_LogLogit') or 
+                        classical_params[organ].get('LKB_Probit') or
+                        classical_params[organ].get('RS_Poisson')
+                    )
+                    has_bio = organ in bio_params and bio_params[organ].get('Logistic')
+                    
+                    if has_classical or has_bio:
+                        organ_for_dr = organ
+                        break
+                
+                if organ_for_dr is None:
+                    print("  Warning: No organ with sufficient data and refitted parameters found for DR plots")
+                else:
+                    # Extract data
+                    gEUD = organ_data_valid['gEUD'].values
+                    mean_dose = organ_data_valid['mean_dose'].values
+                    ntcp_obs = organ_data_valid['Observed_Toxicity'].values.astype(float)
+                    
+                    # Get NTCP predictions
+                    ntcp_lkb_loglogit_pred = organ_data_valid['NTCP_LKB_LogLogit'].values if 'NTCP_LKB_LogLogit' in organ_data_valid.columns else np.array([])
+                    ntcp_lkb_probit_pred = organ_data_valid['NTCP_LKB_Probit'].values if 'NTCP_LKB_Probit' in organ_data_valid.columns else np.array([])
+                    ntcp_rs_pred = organ_data_valid['NTCP_RS_Poisson'].values if 'NTCP_RS_Poisson' in organ_data_valid.columns else np.array([])
+                    ntcp_ann_pred = organ_data_valid['NTCP_ML_ANN'].values if 'NTCP_ML_ANN' in organ_data_valid.columns else np.array([])
+                    ntcp_xgb_pred = organ_data_valid['NTCP_ML_XGBoost'].values if 'NTCP_ML_XGBoost' in organ_data_valid.columns else np.array([])
+                    
+                    # Get refitted parameters
+                    lkb_loglogit_params = None
+                    lkb_probit_params = None
+                    rs_poisson_params = None
+                    bio_logistic_params = None
+                    
+                    if organ_for_dr in classical_params:
+                        if classical_params[organ_for_dr].get('LKB_LogLogit'):
+                            lkb_loglogit_params = classical_params[organ_for_dr]['LKB_LogLogit'].get('point_estimate')
+                        if classical_params[organ_for_dr].get('LKB_Probit'):
+                            lkb_probit_params = classical_params[organ_for_dr]['LKB_Probit'].get('point_estimate')
+                        if classical_params[organ_for_dr].get('RS_Poisson'):
+                            rs_poisson_params = classical_params[organ_for_dr]['RS_Poisson'].get('point_estimate')
+                    
+                    if organ_for_dr in bio_params:
+                        if bio_params[organ_for_dr].get('Logistic'):
+                            bio_logistic_params = bio_params[organ_for_dr]['Logistic'].get('point_estimate')
+                    
+                    # Create vectorized model functions
+                    ntcp_lkb_loglogit = None
+                    ntcp_lkb_probit = None
+                    ntcp_rs_poisson = None
+                    ntcp_biological = None
+                    
+                    if lkb_loglogit_params:
+                        td50 = lkb_loglogit_params['TD50']
+                        gamma50 = lkb_loglogit_params['gamma50']
+                        ntcp_lkb_loglogit = lambda x: 1.0 / (1.0 + np.power(td50 / np.maximum(x, 1e-6), 4.0 * gamma50))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'LKB_LogLogit' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_LogLogit']
+                        td50 = lit_params['TD50']
+                        gamma50 = lit_params['gamma50']
+                        alpha_beta = lit_params.get('alpha_beta', 3)
+                        ntcp_lkb_loglogit = lambda x: ntcp_calc.ntcp_lkb_loglogit(
+                            ntcp_calc.convert_to_eqd2(x, alpha_beta, 2.0), td50, gamma50
+                        )
+                    
+                    if lkb_probit_params:
+                        td50 = lkb_probit_params['TD50']
+                        m = lkb_probit_params['m']
+                        n = lkb_probit_params.get('n', 0.5)
+                        # For probit, we need v_effective - use a simplified version with gEUD
+                        # Create a simplified probit function using gEUD directly
+                        ntcp_lkb_probit = lambda x: norm.cdf((x - td50) / (m * td50))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'LKB_Probit' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_Probit']
+                        td50 = lit_params['TD50']
+                        m = lit_params['m']
+                        ntcp_lkb_probit = lambda x: norm.cdf((x - td50) / (m * td50))
+                    
+                    if rs_poisson_params:
+                        d50 = rs_poisson_params['D50']
+                        gamma = rs_poisson_params['gamma']
+                        # RS Poisson: NTCP = 1 - exp(-(D/D50)^gamma)
+                        ntcp_rs_poisson = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'RS_Poisson' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['RS_Poisson']
+                        d50 = lit_params['D50']
+                        gamma = lit_params['gamma']
+                        ntcp_rs_poisson = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                    
+                    if bio_logistic_params:
+                        TD50_bio = bio_logistic_params['TD50']
+                        k_bio = bio_logistic_params['k']
+                        ntcp_biological = lambda x: expit((x - TD50_bio) / k_bio)
+                    
+                    # Create DR_plots directory
+                    dr_dir = os.path.join(args.output_dir, "DR_plots")
+                    os.makedirs(dr_dir, exist_ok=True)
+                    
+                    # --------------------------------------------------------
+                    # FIGURE 1 — LKB Dose–Response (gEUD axis)
+                    # --------------------------------------------------------
+                    if ntcp_lkb_loglogit is not None or ntcp_lkb_probit is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(np.min(gEUD), np.max(gEUD), 300)
+                        
+                        if ntcp_lkb_loglogit is not None:
+                            ax.plot(x, ntcp_lkb_loglogit(x),
+                                    color="#1f77b4", lw=3.0, label="LKB (Log-logit)")
+                        if ntcp_lkb_probit is not None:
+                            ax.plot(x, ntcp_lkb_probit(x),
+                                    color="#d62728", lw=3.0, ls="--", label="LKB (Probit)")
+                        
+                        ax.scatter(gEUD, ntcp_obs,
+                                   facecolors="none", edgecolors="#1f77b4",
+                                   s=55, lw=1.6, alpha=0.85)
+                        
+                        ax.set_xlabel("Parotid gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(dr_dir, "Figure1_LKB_gEUD_DR.png"), dpi=1200)
+                        plt.savefig(os.path.join(dr_dir, "Figure1_LKB_gEUD_DR.svg"))
+                        plt.close()
+                        print(f"    Saved Figure1_LKB_gEUD_DR.png")
+                    
+                    # --------------------------------------------------------
+                    # FIGURE 2 — RS Poisson Dose–Response (gEUD axis)
+                    # --------------------------------------------------------
+                    if ntcp_rs_poisson is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(np.min(gEUD), np.max(gEUD), 300)
+                        
+                        ax.plot(x, ntcp_rs_poisson(x),
+                                color="#f0ad1a", lw=3.0, ls="-.", label="RS Poisson")
+                        
+                        ax.scatter(gEUD, ntcp_obs,
+                                   marker="^", facecolors="none",
+                                   edgecolors="#f0ad1a", s=65, lw=1.6)
+                        
+                        ax.set_xlabel("Parotid gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(dr_dir, "Figure2_RS_gEUD_DR.png"), dpi=1200)
+                        plt.savefig(os.path.join(dr_dir, "Figure2_RS_gEUD_DR.svg"))
+                        plt.close()
+                        print(f"    Saved Figure2_RS_gEUD_DR.png")
+                    
+                    # --------------------------------------------------------
+                    # FIGURE 3 — Biological Logistic Dose–Response (Mean Dose)
+                    # --------------------------------------------------------
+                    if ntcp_biological is not None and TD50_bio is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x_md = np.linspace(np.min(mean_dose), np.max(mean_dose), 300)
+                        
+                        ax.plot(x_md, ntcp_biological(x_md),
+                                color="#2c3e50", lw=3.5, label="Biological logistic")
+                        
+                        ax.scatter(mean_dose, ntcp_obs,
+                                   color="gray", alpha=0.65, s=45, zorder=2)
+                        
+                        ax.axvline(TD50_bio, color="#7f7f7f",
+                                   lw=2.0, ls=":", label="TD50")
+                        
+                        ax.set_xlabel("Mean parotid dose (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(frameon=True, fontsize=11, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(dr_dir, "Figure3_Biological_MeanDose_DR.png"), dpi=1200)
+                        plt.savefig(os.path.join(dr_dir, "Figure3_Biological_MeanDose_DR.svg"))
+                        plt.close()
+                        print(f"    Saved Figure3_Biological_MeanDose_DR.png")
+                    
+                    # --------------------------------------------------------
+                    # FIGURE 4 — Predicted NTCP Comparison (Clinical)
+                    # --------------------------------------------------------
+                    if (len(ntcp_lkb_loglogit_pred) > 0 or len(ntcp_lkb_probit_pred) > 0 or 
+                        len(ntcp_rs_pred) > 0 or len(ntcp_ann_pred) > 0 or len(ntcp_xgb_pred) > 0):
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        if len(ntcp_lkb_loglogit_pred) > 0:
+                            ax.scatter(gEUD, ntcp_lkb_loglogit_pred, s=40, alpha=0.6, label="LKB Log-logit")
+                        if len(ntcp_lkb_probit_pred) > 0:
+                            ax.scatter(gEUD, ntcp_lkb_probit_pred, s=40, alpha=0.6, label="LKB Probit")
+                        if len(ntcp_rs_pred) > 0:
+                            ax.scatter(gEUD, ntcp_rs_pred, s=40, alpha=0.6, label="RS Poisson")
+                        if len(ntcp_ann_pred) > 0:
+                            ax.scatter(gEUD, ntcp_ann_pred, s=40, alpha=0.6, label="ANN")
+                        if len(ntcp_xgb_pred) > 0:
+                            ax.scatter(gEUD, ntcp_xgb_pred, s=40, alpha=0.6, label="XGBoost")
+                        
+                        ax.set_xlabel("Parotid gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=10, frameon=True, ncol=2)
+                        
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(dr_dir, "Figure4_Predicted_NTCP_Comparison.png"), dpi=1200)
+                        plt.savefig(os.path.join(dr_dir, "Figure4_Predicted_NTCP_Comparison.svg"))
+                        plt.close()
+                        print(f"    Saved Figure4_Predicted_NTCP_Comparison.png")
+                    
+                    print("  [OK] Model-native dose-response plots generated")
+            except Exception as e:
+                print(f"  Warning: Model-native DR plotting failed: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Step 2: Enhanced summary report
         print("\n Step 2: Generating enhanced summary report...")
@@ -3416,6 +4560,745 @@ def main():
         print("    pip install scikit-learn xgboost pandas numpy matplotlib seaborn scipy openpyxl")
         print("  • Verify DVH files and patient data formats")
         print("  • Ensure unique patient IDs in DVH filenames")
+        
+        # =========================
+        # PUBLICATION DR PLOTS
+        # =========================
+        
+        # Publication-grade DR plots (biological + classical only)
+        # ============================================================
+        # Publication-quality Dose–Response (DR) plots
+        # Biological + Classical models ONLY
+        # ============================================================
+        
+        try:
+            # Extract data from results_df for the first organ with sufficient data
+            if 'results_df' in locals() and results_df is not None and len(results_df) > 0:
+                # Find organ with biological or classical models
+                organ_for_dr = None
+                for organ in sorted(results_df['Organ'].unique()):
+                    organ_data = results_df[results_df['Organ'] == organ].copy()
+                    valid_mask = (
+                        organ_data['gEUD'].notna() &
+                        (organ_data['gEUD'] > 0) &
+                        organ_data['mean_dose'].notna() &
+                        (organ_data['mean_dose'] > 0) &
+                        organ_data['Observed_Toxicity'].notna()
+                    )
+                    organ_data_valid = organ_data[valid_mask].copy()
+                    
+                    if len(organ_data_valid) < 5:
+                        continue
+                    
+                    # Check if we have classical or biological models
+                    has_classical = (
+                        'NTCP_LKB_LogLogit' in organ_data_valid.columns or
+                        'NTCP_LKB_Probit' in organ_data_valid.columns or
+                        'NTCP_RS_Poisson' in organ_data_valid.columns
+                    )
+                    has_bio = 'NTCP_Biological_Logistic' in organ_data_valid.columns
+                    
+                    if has_classical or has_bio:
+                        organ_for_dr = organ
+                        break
+                
+                if organ_for_dr is not None:
+                    organ_data = results_df[results_df['Organ'] == organ_for_dr].copy()
+                    valid_mask = (
+                        organ_data['gEUD'].notna() &
+                        (organ_data['gEUD'] > 0) &
+                        organ_data['mean_dose'].notna() &
+                        (organ_data['mean_dose'] > 0) &
+                        organ_data['Observed_Toxicity'].notna()
+                    )
+                    organ_data_valid = organ_data[valid_mask].copy()
+                    
+                    # Extract observed endpoint
+                    y_obs = organ_data_valid['Observed_Toxicity'].values.astype(int)
+                    gEUD = organ_data_valid['gEUD'].values
+                    mean_dose = organ_data_valid['mean_dose'].values
+                    
+                    # Use ntcp_calc already initialized at function scope
+                    # (No need to recreate - already available)
+                    
+                    # Load refitted parameters if available
+                    classical_params = {}
+                    bio_params = {}
+                    refit_dir = Path(args.output_dir) / 'biological_refitting'
+                    if refit_dir.exists():
+                        classical_params_file = refit_dir / 'classical_refitted_params.json'
+                        bio_params_file = refit_dir / 'biological_refitted_params.json'
+                        if classical_params_file.exists():
+                            import json
+                            with open(classical_params_file, 'r') as f:
+                                classical_params = json.load(f)
+                        if bio_params_file.exists():
+                            import json
+                            with open(bio_params_file, 'r') as f:
+                                bio_params = json.load(f)
+                    
+                    # Create model functions
+                    ntcp_lkb_loglogit = None
+                    ntcp_lkb_probit = None
+                    ntcp_rs_poisson = None
+                    ntcp_biological = None
+                    TD50_bio = None
+                    
+                    # LKB Log-logit
+                    if organ_for_dr in classical_params and classical_params[organ_for_dr].get('LKB_LogLogit'):
+                        params = classical_params[organ_for_dr]['LKB_LogLogit'].get('point_estimate', {})
+                        if params:
+                            td50 = params.get('TD50')
+                            gamma50 = params.get('gamma50')
+                            if td50 and gamma50:
+                                ntcp_lkb_loglogit = lambda x: 1.0 / (1.0 + np.power(td50 / np.maximum(x, 1e-6), 4.0 * gamma50))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'LKB_LogLogit' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_LogLogit']
+                        td50 = lit_params['TD50']
+                        gamma50 = lit_params['gamma50']
+                        alpha_beta = lit_params.get('alpha_beta', 3)
+                        ntcp_lkb_loglogit = lambda x: ntcp_calc.ntcp_lkb_loglogit(
+                            ntcp_calc.convert_to_eqd2(x, alpha_beta, 2.0), td50, gamma50
+                        )
+                    
+                    # LKB Probit
+                    if organ_for_dr in classical_params and classical_params[organ_for_dr].get('LKB_Probit'):
+                        params = classical_params[organ_for_dr]['LKB_Probit'].get('point_estimate', {})
+                        if params:
+                            td50 = params.get('TD50')
+                            m = params.get('m')
+                            if td50 and m:
+                                ntcp_lkb_probit = lambda x: norm.cdf((x - td50) / (m * td50))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'LKB_Probit' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['LKB_Probit']
+                        td50 = lit_params['TD50']
+                        m = lit_params['m']
+                        ntcp_lkb_probit = lambda x: norm.cdf((x - td50) / (m * td50))
+                    
+                    # RS Poisson
+                    if organ_for_dr in classical_params and classical_params[organ_for_dr].get('RS_Poisson'):
+                        params = classical_params[organ_for_dr]['RS_Poisson'].get('point_estimate', {})
+                        if params:
+                            d50 = params.get('D50')
+                            gamma = params.get('gamma')
+                            if d50 and gamma:
+                                ntcp_rs_poisson = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                    elif organ_for_dr in ntcp_calc.literature_params and 'RS_Poisson' in ntcp_calc.literature_params[organ_for_dr]:
+                        lit_params = ntcp_calc.literature_params[organ_for_dr]['RS_Poisson']
+                        d50 = lit_params['D50']
+                        gamma = lit_params['gamma']
+                        ntcp_rs_poisson = lambda x: 1.0 - np.exp(-np.power(np.maximum(x, 1e-6) / d50, gamma))
+                    
+                    # Biological logistic
+                    if organ_for_dr in bio_params and bio_params[organ_for_dr].get('Logistic'):
+                        params = bio_params[organ_for_dr]['Logistic'].get('point_estimate', {})
+                        if params:
+                            TD50_bio = params.get('TD50')
+                            k_bio = params.get('k')
+                            if TD50_bio and k_bio:
+                                from scipy.special import expit
+                                ntcp_biological = lambda x: expit((x - TD50_bio) / k_bio)
+                    
+                    # Create DR plots directory
+                    DR_DIR = Path(args.output_dir) / "DR_plots"
+                    DR_DIR.mkdir(parents=True, exist_ok=True)
+                    
+                    # ============================================================
+                    # FIGURE 1 — LKB DR (gEUD)
+                    # ============================================================
+                    if ntcp_lkb_loglogit is not None or ntcp_lkb_probit is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(gEUD.min(), gEUD.max(), 400)
+                        
+                        if ntcp_lkb_loglogit is not None:
+                            ax.plot(x, ntcp_lkb_loglogit(x),
+                                    color="#1f77b4", lw=3.2, label="LKB (Log-logit)")
+                        
+                        if ntcp_lkb_probit is not None:
+                            ax.plot(x, ntcp_lkb_probit(x),
+                                    color="#d62728", lw=3.2, ls="--", label="LKB (Probit)")
+                        
+                        ax.scatter(gEUD, y_obs,
+                                   facecolors="none", edgecolors="gray",
+                                   s=55, lw=1.6, alpha=0.9)
+                        
+                        ax.set_xlabel(f"{organ_for_dr} gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_xlim(left=0)
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=11, frameon=True, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(DR_DIR / "Figure1_LKB_gEUD_DR.png", dpi=1200)
+                        plt.savefig(DR_DIR / "Figure1_LKB_gEUD_DR.svg")
+                        plt.close()
+                    
+                    # ============================================================
+                    # FIGURE 2 — RS Poisson DR (gEUD)
+                    # ============================================================
+                    if ntcp_rs_poisson is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(gEUD.min(), gEUD.max(), 400)
+                        
+                        ax.plot(x, ntcp_rs_poisson(x),
+                                color="#f0ad1a", lw=3.2, ls="-.", label="RS Poisson")
+                        
+                        ax.scatter(gEUD, y_obs,
+                                   marker="^", facecolors="none",
+                                   edgecolors="#f0ad1a", s=65, lw=1.6)
+                        
+                        ax.set_xlabel(f"{organ_for_dr} gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=11, frameon=True, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(DR_DIR / "Figure2_RS_gEUD_DR.png", dpi=1200)
+                        plt.savefig(DR_DIR / "Figure2_RS_gEUD_DR.svg")
+                        plt.close()
+                    
+                    # ============================================================
+                    # FIGURE 3 — Biological Logistic DR (Mean dose)
+                    # ============================================================
+                    if ntcp_biological is not None and TD50_bio is not None:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x_md = np.linspace(mean_dose.min(), mean_dose.max(), 400)
+                        
+                        ax.plot(x_md, ntcp_biological(x_md),
+                                color="#2c3e50", lw=3.8, label="Biological logistic")
+                        
+                        ax.scatter(mean_dose, y_obs,
+                                   color="gray", alpha=0.65, s=45)
+                        
+                        ax.axvline(TD50_bio, color="gray", lw=2.2, ls=":", label="TD50")
+                        
+                        ax.set_xlabel(f"Mean {organ_for_dr.lower()} dose (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, alpha=0.25)
+                        ax.legend(fontsize=11, frameon=True, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(DR_DIR / "Figure3_Biological_MeanDose_DR.png", dpi=1200)
+                        plt.savefig(DR_DIR / "Figure3_Biological_MeanDose_DR.svg")
+                        plt.close()
+                    
+                    # ============================================================
+                    # FIGURE 4 — Classical Models Only (NO ML)
+                    # ============================================================
+                    # Create code3_output/DR_plots directory
+                    code3_dr_dir = Path(args.output_dir) / "DR_plots"
+                    code3_dr_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Generate Figure4 with ONLY classical models
+                    if (ntcp_lkb_loglogit is not None or ntcp_lkb_probit is not None or ntcp_rs_poisson is not None):
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        x = np.linspace(gEUD.min(), gEUD.max(), 400)
+                        
+                        # LKB Log-logit
+                        if ntcp_lkb_loglogit is not None:
+                            ax.plot(x, ntcp_lkb_loglogit(x),
+                                    color="#1f77b4", lw=3.5, label="LKB (Log-logit)")
+                            ax.scatter(gEUD, y_obs,
+                                       facecolors="none", edgecolors="#1f77b4",
+                                       s=60, lw=1.6, alpha=0.9, zorder=5)
+                        
+                        # LKB Probit
+                        if ntcp_lkb_probit is not None:
+                            ax.plot(x, ntcp_lkb_probit(x),
+                                    color="#d62728", lw=3.5, ls="--", label="LKB (Probit)")
+                            ax.scatter(gEUD, y_obs,
+                                       marker="s", facecolors="none", edgecolors="#d62728",
+                                       s=60, lw=1.6, alpha=0.9, zorder=5)
+                        
+                        # RS Poisson
+                        if ntcp_rs_poisson is not None:
+                            ax.plot(x, ntcp_rs_poisson(x),
+                                    color="#f0ad1a", lw=3.5, ls="-.", label="RS Poisson")
+                            ax.scatter(gEUD, y_obs,
+                                       marker="^", facecolors="none", edgecolors="#f0ad1a",
+                                       s=60, lw=1.6, alpha=0.9, zorder=5)
+                        
+                        # Explicitly EXCLUDE ML models - NO ANN, NO XGBoost
+                        # This figure shows ONLY classical NTCP models
+                        
+                        ax.set_xlabel("gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, which="major", alpha=0.25)
+                        ax.legend(fontsize=11, frameon=True, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plt.savefig(code3_dr_dir / "Figure4_DR_Classical_Only.png", dpi=1200)
+                        plt.savefig(code3_dr_dir / "Figure4_DR_Classical_Only.svg")
+                        plt.close()
+                        print(f"  [OK] Figure4_DR_Classical_Only.png saved (classical models only, NO ML)")
+                    
+                    print(f"\n[DR PLOTS] Publication-grade DR plots saved to {DR_DIR}")
+        except Exception as dr_error:
+            print(f"\nWarning: Could not generate publication DR plots: {dr_error}")
+            import traceback
+            traceback.print_exc()
+        
+        # ============================================================
+        # PAROTID VOLUME SENSITIVITY ANALYSIS (REPORTING-ONLY)
+        # ============================================================
+        
+        def perform_parotid_volume_sensitivity_analysis(results_df, output_dir, ntcp_calc):
+            """
+            Perform reporting-only sensitivity analysis for parotid volume heterogeneity.
+            Does NOT modify models, predictions, or exclude patients.
+            """
+            try:
+                print("\n[ANALYSIS] Performing parotid volume sensitivity analysis (reporting-only)...")
+                
+                # Filter for Parotid organ only
+                parotid_data = results_df[results_df['Organ'].str.contains('Parotid', case=False, na=False)].copy()
+                
+                if len(parotid_data) == 0:
+                    print("  Warning: No Parotid data found. Skipping volume sensitivity analysis.")
+                    return
+                
+                # Group by patient to compute total parotid volume
+                patient_volumes = {}
+                for _, row in parotid_data.iterrows():
+                    patient_id = row.get('PrimaryPatientID') or row.get('AnonPatientID')
+                    if patient_id is None:
+                        continue
+                    
+                    if patient_id not in patient_volumes:
+                        patient_volumes[patient_id] = 0.0
+                    
+                    volume = row.get('total_volume', 0.0)
+                    if pd.notna(volume):
+                        patient_volumes[patient_id] += float(volume)
+                
+                # Add volume category column
+                parotid_data = parotid_data.copy()
+                parotid_data['parotid_volume_category'] = parotid_data.apply(
+                    lambda row: (
+                        'low_volume' if patient_volumes.get(row.get('PrimaryPatientID') or row.get('AnonPatientID'), 0.0) < 40.0
+                        else 'high_volume'
+                    ), axis=1
+                )
+                
+                # Descriptive analysis by category
+                sensitivity_summary = []
+                
+                for category in ['low_volume', 'high_volume']:
+                    cat_data = parotid_data[parotid_data['parotid_volume_category'] == category].copy()
+                    
+                    if len(cat_data) == 0:
+                        continue
+                    
+                    n = len(cat_data)
+                    mean_dose_mean = cat_data['mean_dose'].mean() if 'mean_dose' in cat_data.columns else np.nan
+                    mean_dose_sd = cat_data['mean_dose'].std() if 'mean_dose' in cat_data.columns else np.nan
+                    geud_mean = cat_data['gEUD'].mean() if 'gEUD' in cat_data.columns else np.nan
+                    geud_sd = cat_data['gEUD'].std() if 'gEUD' in cat_data.columns else np.nan
+                    
+                    # NTCP means
+                    ntcp_lkb_loglogit_mean = cat_data['NTCP_LKB_LogLogit'].mean() if 'NTCP_LKB_LogLogit' in cat_data.columns else np.nan
+                    ntcp_lkb_probit_mean = cat_data['NTCP_LKB_Probit'].mean() if 'NTCP_LKB_Probit' in cat_data.columns else np.nan
+                    ntcp_rs_poisson_mean = cat_data['NTCP_RS_Poisson'].mean() if 'NTCP_RS_Poisson' in cat_data.columns else np.nan
+                    
+                    # Observed toxicity rate
+                    obs_tox_rate = cat_data['Observed_Toxicity'].mean() if 'Observed_Toxicity' in cat_data.columns else np.nan
+                    
+                    sensitivity_summary.append({
+                        'Volume_Category': category,
+                        'N': n,
+                        'Mean_Dose_Mean': f"{mean_dose_mean:.2f}" if pd.notna(mean_dose_mean) else 'N/A',
+                        'Mean_Dose_SD': f"{mean_dose_sd:.2f}" if pd.notna(mean_dose_sd) else 'N/A',
+                        'gEUD_Mean': f"{geud_mean:.2f}" if pd.notna(geud_mean) else 'N/A',
+                        'gEUD_SD': f"{geud_sd:.2f}" if pd.notna(geud_sd) else 'N/A',
+                        'NTCP_LKB_LogLogit_Mean': f"{ntcp_lkb_loglogit_mean:.4f}" if pd.notna(ntcp_lkb_loglogit_mean) else 'N/A',
+                        'NTCP_LKB_Probit_Mean': f"{ntcp_lkb_probit_mean:.4f}" if pd.notna(ntcp_lkb_probit_mean) else 'N/A',
+                        'NTCP_RS_Poisson_Mean': f"{ntcp_rs_poisson_mean:.4f}" if pd.notna(ntcp_rs_poisson_mean) else 'N/A',
+                        'Observed_Toxicity_Rate': f"{obs_tox_rate:.4f}" if pd.notna(obs_tox_rate) else 'N/A'
+                    })
+                
+                # Export summary table
+                if sensitivity_summary:
+                    sensitivity_df = pd.DataFrame(sensitivity_summary)
+                    sensitivity_file = Path(output_dir) / 'parotid_volume_sensitivity.xlsx'
+                    sensitivity_df.to_excel(sensitivity_file, index=False)
+                    print(f"  [OK] Parotid volume sensitivity summary saved to {sensitivity_file}")
+                
+                # Generate plot: NTCP vs gEUD colored by volume category
+                if len(parotid_data) > 0 and 'gEUD' in parotid_data.columns:
+                    # Get classical NTCP predictions
+                    valid_data = parotid_data.dropna(subset=['gEUD', 'Observed_Toxicity']).copy()
+                    
+                    if len(valid_data) > 0:
+                        fig, ax = plt.subplots(figsize=(7.5, 6.0))
+                        
+                        # Plot by category
+                        for category, color, marker in [('low_volume', '#2ca02c', 'o'), ('high_volume', '#9467bd', 's')]:
+                            cat_data = valid_data[valid_data['parotid_volume_category'] == category]
+                            if len(cat_data) > 0:
+                                geud_vals = cat_data['gEUD'].values
+                                
+                                # Plot classical model predictions
+                                if 'NTCP_LKB_LogLogit' in cat_data.columns:
+                                    ntcp_vals = cat_data['NTCP_LKB_LogLogit'].values
+                                    ax.scatter(geud_vals, ntcp_vals,
+                                               c=color, marker=marker, s=60, alpha=0.7,
+                                               label=f"LKB Log-logit ({category})", edgecolors='black', linewidths=0.5)
+                        
+                        ax.set_xlabel("gEUD (Gy)", fontsize=14, fontweight="bold")
+                        ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
+                        ax.set_ylim(0, 1.02)
+                        ax.grid(True, which="major", alpha=0.25)
+                        ax.legend(fontsize=11, frameon=True, loc="lower right")
+                        
+                        plt.tight_layout()
+                        plot_file = Path(output_dir) / 'DR_plots' / 'Figure4b_DR_Volume_Sensitivity.png'
+                        plot_file.parent.mkdir(parents=True, exist_ok=True)
+                        plt.savefig(plot_file, dpi=1200)
+                        plt.close()
+                        print(f"  [OK] Volume sensitivity plot saved to {plot_file}")
+                
+            except Exception as e:
+                print(f"  Warning: Parotid volume sensitivity analysis failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Perform parotid volume sensitivity analysis
+        try:
+            perform_parotid_volume_sensitivity_analysis(results_df, args.output_dir, ntcp_calc)
+        except Exception as e:
+            print(f"  Warning: Volume sensitivity analysis failed: {e}")
+        
+        # ============================================================
+        # MANUSCRIPT MATERIALS BUNDLE
+        # ============================================================
+        
+        def create_manuscript_materials_bundle(results_df, output_dir, ntcp_calc):
+            """
+            Create manuscript_materials output bundle with figures, tables, and methods.
+            """
+            try:
+                print("\n[MANUSCRIPT] Creating manuscript materials bundle...")
+                
+                manuscript_dir = Path(output_dir) / 'manuscript_materials'
+                figures_dir = manuscript_dir / 'figures'
+                tables_dir = manuscript_dir / 'tables'
+                methods_dir = manuscript_dir / 'methods'
+                
+                figures_dir.mkdir(parents=True, exist_ok=True)
+                tables_dir.mkdir(parents=True, exist_ok=True)
+                methods_dir.mkdir(parents=True, exist_ok=True)
+                
+                # ============================================================
+                # TABLES: manuscript_results.xlsx
+                # ============================================================
+                
+                excel_file = tables_dir / 'manuscript_tables.xlsx'
+                print(f"  Creating manuscript_results.xlsx...")
+                
+                with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+                    # Sheet 1: DoseMetrics
+                    dose_metrics_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ', 'gEUD', 'mean_dose', 'max_dose', 'total_volume']
+                    v_cols = [col for col in results_df.columns if col.startswith('V') and col[1:].isdigit()]
+                    d_cols = [col for col in results_df.columns if col.startswith('D') and any(c.isdigit() for c in col[1:])]
+                    dose_metrics_cols.extend(v_cols)
+                    dose_metrics_cols.extend(d_cols)
+                    available_dose_cols = [col for col in dose_metrics_cols if col in results_df.columns]
+                    dose_df = results_df[available_dose_cols].copy()
+                    numeric_dose_cols = dose_df.select_dtypes(include=[np.number]).columns
+                    for col in numeric_dose_cols:
+                        dose_df[col] = dose_df[col].round(2)
+                    dose_df.to_excel(writer, sheet_name='DoseMetrics', index=False)
+                    
+                    # Sheet 2: NTCP_Classical
+                    ntcp_classical_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ', 'Observed_Toxicity']
+                    classical_models = ['NTCP_LKB_LogLogit', 'NTCP_LKB_Probit', 'NTCP_RS_Poisson', 'NTCP_Biological_Logistic']
+                    for col in classical_models:
+                        if col in results_df.columns:
+                            ntcp_classical_cols.append(col)
+                    ntcp_classical_df = results_df[ntcp_classical_cols].copy()
+                    for col in classical_models:
+                        if col in ntcp_classical_df.columns:
+                            ntcp_classical_df[col] = ntcp_classical_df[col].round(4)
+                    ntcp_classical_df.to_excel(writer, sheet_name='NTCP_Classical', index=False)
+                    
+                    # Sheet 3: NTCP_ML
+                    ntcp_ml_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ', 'Observed_Toxicity']
+                    ml_models = ['NTCP_ML_ANN', 'NTCP_ML_XGBoost']
+                    for col in ml_models:
+                        if col in results_df.columns:
+                            ntcp_ml_cols.append(col)
+                    if len(ntcp_ml_cols) > 4:  # More than just ID columns
+                        ntcp_ml_df = results_df[ntcp_ml_cols].copy()
+                        for col in ml_models:
+                            if col in ntcp_ml_df.columns:
+                                ntcp_ml_df[col] = ntcp_ml_df[col].round(4)
+                        ntcp_ml_df.to_excel(writer, sheet_name='NTCP_ML', index=False)
+                    else:
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'NTCP_ML_ANN', 'NTCP_ML_XGBoost']).to_excel(
+                            writer, sheet_name='NTCP_ML', index=False)
+                    
+                    # Sheet 4: Radiobiology_Parameters
+                    lit_params_data = []
+                    for organ, params in ntcp_calc.literature_params.items():
+                        for model_type, model_params in params.items():
+                            row = {'Organ': organ, 'Model': model_type, **model_params}
+                            lit_params_data.append(row)
+                    lit_params_df = pd.DataFrame(lit_params_data)
+                    lit_params_df.to_excel(writer, sheet_name='Radiobiology_Parameters', index=False)
+                    
+                    # Sheet 5: uNTCP
+                    untcp_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
+                    untcp_data_cols = [col for col in results_df.columns if 'uNTCP' in col or 'untcp' in col.lower()]
+                    untcp_cols.extend(untcp_data_cols)
+                    available_untcp_cols = [col for col in untcp_cols if col in results_df.columns]
+                    if available_untcp_cols:
+                        untcp_df = results_df[available_untcp_cols].copy()
+                        numeric_untcp_cols = untcp_df.select_dtypes(include=[np.number]).columns
+                        for col in numeric_untcp_cols:
+                            untcp_df[col] = untcp_df[col].round(4)
+                        untcp_df.to_excel(writer, sheet_name='uNTCP', index=False)
+                    else:
+                        # Create empty sheet if no uNTCP data
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'uNTCP', 'uNTCP_STD', 'uNTCP_CI_L', 'uNTCP_CI_U']).to_excel(
+                            writer, sheet_name='uNTCP', index=False)
+                    
+                    # Sheet 6: CCS
+                    ccs_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
+                    ccs_data_cols = [col for col in results_df.columns if 'CCS' in col or 'ccs' in col.lower()]
+                    ccs_cols.extend(ccs_data_cols)
+                    available_ccs_cols = [col for col in ccs_cols if col in results_df.columns]
+                    if available_ccs_cols:
+                        ccs_df = results_df[available_ccs_cols].copy()
+                        numeric_ccs_cols = ccs_df.select_dtypes(include=[np.number]).columns
+                        for col in numeric_ccs_cols:
+                            ccs_df[col] = ccs_df[col].round(4)
+                        ccs_df.to_excel(writer, sheet_name='CCS', index=False)
+                    else:
+                        # Create empty sheet if no CCS data
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'CCS', 'CCS_Safety']).to_excel(
+                            writer, sheet_name='CCS', index=False)
+                    
+                    # Sheet 7: Uncertainty
+                    uncertainty_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
+                    uncertainty_data_cols = [col for col in results_df.columns if 'uncertainty' in col.lower() or 'std' in col.lower() or 'CI' in col]
+                    uncertainty_cols.extend(uncertainty_data_cols)
+                    available_uncertainty_cols = [col for col in uncertainty_cols if col in results_df.columns]
+                    if available_uncertainty_cols:
+                        uncertainty_df = results_df[available_uncertainty_cols].copy()
+                        numeric_uncertainty_cols = uncertainty_df.select_dtypes(include=[np.number]).columns
+                        for col in numeric_uncertainty_cols:
+                            uncertainty_df[col] = uncertainty_df[col].round(4)
+                        uncertainty_df.to_excel(writer, sheet_name='Uncertainty', index=False)
+                    else:
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ']).to_excel(
+                            writer, sheet_name='Uncertainty', index=False)
+                    
+                    # Sheet 8: ML_Performance
+                    ml_perf_data = []
+                    for organ in sorted(results_df['Organ'].unique()):
+                        organ_data = results_df[results_df['Organ'] == organ]
+                        row = {'Organ': organ, 'Sample_Size': len(organ_data)}
+                        
+                        for model in ['ML_ANN', 'ML_XGBoost']:
+                            ntcp_col = f'NTCP_{model}'
+                            if ntcp_col in organ_data.columns:
+                                valid_data = organ_data.dropna(subset=[ntcp_col, 'Observed_Toxicity'])
+                                if len(valid_data) >= 5:
+                                    try:
+                                        y_true = valid_data['Observed_Toxicity'].values
+                                        y_pred = valid_data[ntcp_col].values
+                                        fpr, tpr, _ = roc_curve(y_true, y_pred)
+                                        auc_score = auc(fpr, tpr)
+                                        brier_score = brier_score_loss(y_true, y_pred)
+                                        row[f'{model}_AUC'] = f"{auc_score:.3f}"
+                                        row[f'{model}_Brier'] = f"{brier_score:.3f}"
+                                    except:
+                                        row[f'{model}_AUC'] = 'Error'
+                                        row[f'{model}_Brier'] = 'Error'
+                                else:
+                                    row[f'{model}_AUC'] = 'Insufficient Data'
+                                    row[f'{model}_Brier'] = 'Insufficient Data'
+                            else:
+                                row[f'{model}_AUC'] = 'Not Available'
+                                row[f'{model}_Brier'] = 'Not Available'
+                        
+                        ml_perf_data.append(row)
+                    
+                    ml_perf_df = pd.DataFrame(ml_perf_data)
+                    ml_perf_df.to_excel(writer, sheet_name='ML_Performance', index=False)
+                    
+                    # Sheet 9: QA_Overfitting
+                    qa_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
+                    qa_data_cols = [col for col in results_df.columns if 'overfitting' in col.lower() or 'qa' in col.lower() or 'validation' in col.lower()]
+                    qa_cols.extend(qa_data_cols)
+                    available_qa_cols = [col for col in qa_cols if col in results_df.columns]
+                    if available_qa_cols:
+                        qa_df = results_df[available_qa_cols].copy()
+                        qa_df.to_excel(writer, sheet_name='QA_Overfitting', index=False)
+                    else:
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'QA_Flag', 'Overfitting_Risk']).to_excel(
+                            writer, sheet_name='QA_Overfitting', index=False)
+                    
+                    # Sheet 9: Leakage_Checks
+                    leakage_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
+                    leakage_data_cols = [col for col in results_df.columns if 'leakage' in col.lower() or 'data_leak' in col.lower()]
+                    leakage_cols.extend(leakage_data_cols)
+                    available_leakage_cols = [col for col in leakage_cols if col in results_df.columns]
+                    if available_leakage_cols:
+                        leakage_df = results_df[available_leakage_cols].copy()
+                        leakage_df.to_excel(writer, sheet_name='Leakage_Checks', index=False)
+                    else:
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'Leakage_Check', 'Status']).to_excel(
+                            writer, sheet_name='Leakage_Checks', index=False)
+                    
+                    # Sheet 10: Parotid_Volume_Sensitivity
+                    sensitivity_file = Path(output_dir) / 'parotid_volume_sensitivity.xlsx'
+                    if sensitivity_file.exists():
+                        sensitivity_df = pd.read_excel(sensitivity_file)
+                        sensitivity_df.to_excel(writer, sheet_name='Parotid_Volume_Sensitivity', index=False)
+                    else:
+                        pd.DataFrame(columns=['Volume_Category', 'N', 'Mean_Dose_Mean', 'gEUD_Mean', 
+                                             'NTCP_LKB_LogLogit_Mean', 'NTCP_LKB_Probit_Mean', 
+                                             'NTCP_RS_Poisson_Mean', 'Observed_Toxicity_Rate']).to_excel(
+                            writer, sheet_name='Parotid_Volume_Sensitivity', index=False)
+                
+                print(f"  [OK] manuscript_tables.xlsx created with {len(pd.ExcelFile(excel_file).sheet_names)} sheets")
+                
+                # ============================================================
+                # METHODS: methods_models_equations.docx
+                # ============================================================
+                
+                try:
+                    from docx import Document
+                    from docx.shared import Pt
+                    
+                    doc = Document()
+                    
+                    # Title
+                    title = doc.add_heading('Methods: NTCP Models and Statistical Methods', 0)
+                    
+                    # Model Equations Section
+                    doc.add_heading('1. NTCP Model Equations', level=1)
+                    
+                    doc.add_heading('1.1 LKB (Lyman-Kutcher-Burman) Log-Logistic Model', level=2)
+                    doc.add_paragraph(
+                        'NTCP = 1 / (1 + (TD₅₀ / gEUD_EQD₂)^(4γ₅₀))'
+                    )
+                    doc.add_paragraph(
+                        'where gEUD_EQD₂ is the generalized Equivalent Uniform Dose converted to equivalent dose in 2 Gy fractions, '
+                        'TD₅₀ is the dose at which 50% complication probability occurs, and γ₅₀ is the normalized dose-response slope.'
+                    )
+                    
+                    doc.add_heading('1.2 LKB Probit Model', level=2)
+                    doc.add_paragraph(
+                        'NTCP = Φ((gEUD - TD₅₀) / (m × TD₅₀))'
+                    )
+                    doc.add_paragraph(
+                        'where Φ is the cumulative standard normal distribution, TD₅₀ is the dose for 50% complication probability, '
+                        'and m is the normalized slope parameter.'
+                    )
+                    
+                    doc.add_heading('1.3 RS (Relative Seriality) Poisson Model', level=2)
+                    doc.add_paragraph(
+                        'NTCP = 1 - exp(-(D / D₅₀)^γ)'
+                    )
+                    doc.add_paragraph(
+                        'where D is the dose, D₅₀ is the dose for 50% complication probability, and γ is the dose-response parameter.'
+                    )
+                    
+                    doc.add_heading('1.4 Biological Logistic Model', level=2)
+                    doc.add_paragraph(
+                        'NTCP = 1 / (1 + exp(-(D - TD₅₀) / k))'
+                    )
+                    doc.add_paragraph(
+                        'where D is the mean dose, TD₅₀ is the dose for 50% complication probability, and k is the slope parameter.'
+                    )
+                    
+                    doc.add_heading('1.5 Machine Learning Models', level=2)
+                    doc.add_paragraph(
+                        'ANN (Artificial Neural Network): Multi-layer perceptron with hidden layers, trained using backpropagation.'
+                    )
+                    doc.add_paragraph(
+                        'XGBoost: Gradient boosting ensemble method using decision trees with regularization.'
+                    )
+                    
+                    # Parameter Definitions
+                    doc.add_heading('2. Parameter Definitions', level=1)
+                    doc.add_paragraph('gEUD: Generalized Equivalent Uniform Dose, calculated as (Σᵢ vᵢ × Dᵢᵃ)^(1/a)')
+                    doc.add_paragraph('TD₅₀: Dose at which 50% complication probability occurs')
+                    doc.add_paragraph('γ₅₀: Normalized dose-response slope parameter')
+                    doc.add_paragraph('m: Normalized slope parameter for probit model')
+                    doc.add_paragraph('D₅₀: Dose for 50% complication probability (RS Poisson)')
+                    doc.add_paragraph('k: Slope parameter for biological logistic model')
+                    
+                    # Statistical Methods
+                    doc.add_heading('3. Statistical Methods', level=1)
+                    doc.add_paragraph('Model performance was evaluated using:')
+                    doc.add_paragraph('• Area Under the ROC Curve (AUC): Discrimination ability')
+                    doc.add_paragraph('• Brier Score: Calibration quality (lower is better)')
+                    doc.add_paragraph('• Cross-validation: Stratified k-fold (k=5) for ML models')
+                    doc.add_paragraph('• Train-test split: 70-30 stratified split to prevent data leakage')
+                    
+                    # Uncertainty Propagation
+                    doc.add_heading('4. Uncertainty Propagation', level=1)
+                    doc.add_paragraph(
+                        'Uncertainty-Aware NTCP (uNTCP) uses first-order Taylor expansion (Delta method) to propagate parameter uncertainties:'
+                    )
+                    doc.add_paragraph('σ²_NTCP = Σⱼ (∂NTCP/∂θⱼ)² × σ²_θⱼ')
+                    doc.add_paragraph('95% confidence intervals: CI = NTCP ± 1.96 × σ_NTCP')
+                    
+                    # CCS Definition
+                    doc.add_heading('5. Cohort Consistency Score (CCS)', level=1)
+                    doc.add_paragraph(
+                        'CCS quantifies the consistency of a patient\'s dose metrics with the training cohort distribution. '
+                        'Values range from 0 (inconsistent) to 1 (highly consistent). '
+                        'CCS < 0.5 indicates potential extrapolation beyond training data.'
+                    )
+                    
+                    # Governance Disclaimer
+                    doc.add_heading('6. Governance and Disclaimer', level=1)
+                    doc.add_paragraph(
+                        'This analysis pipeline implements published NTCP models from the literature (QUANTEC, Emami et al.). '
+                        'Model parameters may be refitted to local cohort data when sufficient samples are available. '
+                        'All predictions are for research purposes only and should not be used for clinical decision-making without proper validation.'
+                    )
+                    doc.add_paragraph(
+                        'Software: py_ntcpx v1.2.0'
+                    )
+                    
+                    methods_file = methods_dir / 'methods_models_equations.docx'
+                    doc.save(methods_file)
+                    print(f"  [OK] methods_models_equations.docx created")
+                    
+                except ImportError:
+                    print(f"  Warning: python-docx not available. Skipping methods document.")
+                    print(f"  Install with: pip install python-docx")
+                except Exception as e:
+                    print(f"  Warning: Methods document generation failed: {e}")
+                
+                print(f"\n[MANUSCRIPT] Bundle created successfully:")
+                print(f"  Figures: {figures_dir}")
+                print(f"  Tables: {tables_dir}")
+                print(f"  Methods: {methods_dir}")
+                
+            except Exception as e:
+                print(f"  Warning: Manuscript materials bundle creation failed: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Create manuscript materials bundle
+        try:
+            create_manuscript_materials_bundle(results_df, args.output_dir, ntcp_calc)
+        except Exception as e:
+            print(f"  Warning: Manuscript materials bundle failed: {e}")
 
 if __name__ == "__main__":
     main()   

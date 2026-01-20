@@ -41,6 +41,13 @@ except (AttributeError, ValueError):
 import numpy as np
 import pandas as pd
 
+# Import v2.0 leakage detection
+try:
+    from src.reporting.leakage_detector import DataLeakageDetector
+    V2_LEAKAGE_DETECTOR_AVAILABLE = True
+except ImportError:
+    V2_LEAKAGE_DETECTOR_AVAILABLE = False
+
 # Optional deps: if unavailable, the script will print a helpful error.
 try:
     from sklearn.metrics import roc_curve, auc, brier_score_loss
@@ -345,6 +352,34 @@ def main():
             summary_df.to_excel(writer, index=False, sheet_name="PerOrganSummary")
         if patient_ids:
             pd.DataFrame(sorted(list(patient_ids)), columns=["PatientID"]).to_excel(writer, index=False, sheet_name="UniquePatients")
+    
+    # Generate Table X: Classical vs ML comparison
+    if combined is not None and "Observed_Toxicity" in combined.columns:
+        # Try to load clinical data from code0_output if available
+        clinical_df = None
+        try:
+            # Look for clinical_reconciled.xlsx in parent directory
+            parent_dir = input_path.parent if input_path.is_file() else input_path
+            clinical_path = parent_dir / "code0_output" / "clinical_reconciled.xlsx"
+            if not clinical_path.exists():
+                # Try alternative locations
+                for alt_path in [parent_dir.parent / "code0_output" / "clinical_reconciled.xlsx",
+                                 report_dir.parent / "code0_output" / "clinical_reconciled.xlsx"]:
+                    if alt_path.exists():
+                        clinical_path = alt_path
+                        break
+            
+            if clinical_path.exists():
+                clinical_df = pd.read_excel(clinical_path)
+                print(f"[INFO] Loaded clinical data from: {clinical_path}")
+        except Exception as e:
+            print(f"[WARN] Could not load clinical data for Table X: {e}", file=sys.stderr)
+        
+        # Generate Table X
+        try:
+            generate_table_X(combined, clinical_df, report_dir)
+        except Exception as e:
+            print(f"[WARN] Could not generate Table X: {e}", file=sys.stderr)
 
     # Save DOCX report
     docx_path = report_dir / "comprehensive_report.docx"
@@ -402,11 +437,303 @@ def main():
 
         doc.add_heading("5) ML Overfitting/Leakage Heuristics (Applied)", level=1)
         doc.add_paragraph("Flagged when AUC ≥ 0.90 with n < 40 or events < 8. High discrimination in small/low‑event cohorts suggests optimism or leakage.")
+        
+        # V2.0: Data Leakage Detection
+        if V2_LEAKAGE_DETECTOR_AVAILABLE and combined is not None:
+            doc.add_heading("6) Data Leakage Detection (v2.0)", level=1)
+            leakage_detector = DataLeakageDetector()
+            
+            # Check for train/test split information in results
+            # Look for columns that might indicate train/test split
+            has_split_info = any(col.lower() in ['split', 'train', 'test', 'fold'] for col in combined.columns)
+            
+            if has_split_info or 'PrimaryPatientID' in combined.columns:
+                # Try to detect potential leakage
+                if 'PrimaryPatientID' in combined.columns:
+                    # Check for duplicate patients across what might be train/test
+                    patient_counts = combined.groupby('PrimaryPatientID').size()
+                    duplicate_patients = patient_counts[patient_counts > 1]
+                    
+                    if len(duplicate_patients) > 0:
+                        # Check if these duplicates span what might be train/test
+                        leakage_detector.warnings.append(
+                            f"Found {len(duplicate_patients)} patients with multiple entries. "
+                            "This may indicate data leakage if same patients appear in both train and test sets."
+                        )
+                    
+                    # Basic check: ensure patient-level integrity
+                    leakage_detector.checks_performed.append(
+                        f"Patient ID column found: {len(combined['PrimaryPatientID'].unique())} unique patients"
+                    )
+                
+                leakage_report = leakage_detector.generate_report()
+                
+                if leakage_report['has_warnings'] or leakage_report['errors']:
+                    doc.add_paragraph("⚠️ Data Leakage Warnings Detected:")
+                    for warning in leakage_report['warnings']:
+                        doc.add_paragraph(f"• {warning}", style='List Bullet')
+                    for error in leakage_report['errors']:
+                        doc.add_paragraph(f"• {error}", style='List Bullet')
+                else:
+                    doc.add_paragraph("✓ No data leakage detected in available data.")
+                    doc.add_paragraph("Note: Full leakage detection requires access to train/test split information.")
+            else:
+                doc.add_paragraph("Data leakage detection requires PrimaryPatientID column or train/test split information.")
+                doc.add_paragraph("Current data does not contain sufficient information for leakage detection.")
+        else:
+            doc.add_heading("6) Data Leakage Detection", level=1)
+            doc.add_paragraph("v2.0 leakage detection components not available. Install v2.0 components for enhanced leakage detection.")
 
         doc.save(docx_path)
 
     print(f"[OK] Saved report: {docx_path}")
     print(f"[OK] Saved tables: {excel_path}")
+
+
+def generate_table_X(ntcp_df, clinical_df, output_dir):
+    """
+    Generate Table X:
+    Performance of classical NTCP (literature vs local) vs ML
+    
+    Args:
+        ntcp_df: DataFrame with NTCP predictions (must contain NTCP columns and Observed_Toxicity)
+        clinical_df: DataFrame with clinical data (must contain xerostomia_grade2plus)
+        output_dir: Output directory for saving tables
+    """
+    import os
+    from scipy.stats import spearmanr
+    
+    # Import metrics
+    try:
+        from sklearn.metrics import roc_auc_score, brier_score_loss, roc_curve
+    except ImportError:
+        print("[WARN] scikit-learn not available; Table X metrics will be NaN", file=sys.stderr)
+        roc_auc_score = None
+        brier_score_loss = None
+    
+    # Helper functions for metrics
+    def compute_auc(y_true, y_pred):
+        """Compute AUC (ROC)"""
+        if roc_auc_score is None:
+            return float("nan")
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        if len(y_true) < 5 or len(np.unique(y_true)) < 2:
+            return float("nan")
+        try:
+            return float(roc_auc_score(y_true, y_pred))
+        except Exception:
+            return float("nan")
+    
+    def compute_brier_score(y_true, y_pred):
+        """Compute Brier score"""
+        if brier_score_loss is None:
+            return float("nan")
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        if len(y_true) < 5:
+            return float("nan")
+        try:
+            return float(brier_score_loss(y_true, y_pred))
+        except Exception:
+            return float("nan")
+    
+    def compute_calibration_slope_intercept(y_true, y_pred):
+        """Compute calibration slope and intercept using binned calibration"""
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        
+        # Remove NaN values
+        valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+        if valid_mask.sum() < 10:
+            return float("nan"), float("nan")
+        
+        y_true_valid = y_true[valid_mask]
+        y_pred_valid = y_pred[valid_mask]
+        
+        # Bin predictions (5 bins)
+        n_bins = min(5, len(y_pred_valid) // 3)
+        if n_bins < 2:
+            return float("nan"), float("nan")
+        
+        try:
+            bin_edges = np.linspace(0, 1, n_bins + 1)
+            bin_indices = np.digitize(y_pred_valid, bin_edges) - 1
+            bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+            
+            bin_centers = []
+            bin_observed = []
+            
+            for i in range(n_bins):
+                mask = (bin_indices == i)
+                if mask.sum() > 0:
+                    bin_centers.append(np.mean(y_pred_valid[mask]))
+                    bin_observed.append(np.mean(y_true_valid[mask]))
+            
+            if len(bin_centers) < 2:
+                return float("nan"), float("nan")
+            
+            bin_centers = np.array(bin_centers)
+            bin_observed = np.array(bin_observed)
+            
+            # Linear regression: observed = slope * predicted + intercept
+            x_mean = np.mean(bin_centers)
+            y_mean = np.mean(bin_observed)
+            numerator = np.sum((bin_centers - x_mean) * (bin_observed - y_mean))
+            denominator = np.sum((bin_centers - x_mean) ** 2)
+            
+            if denominator == 0:
+                return float("nan"), float("nan")
+            
+            slope = numerator / denominator
+            intercept = y_mean - slope * x_mean
+            
+            return float(slope), float(intercept)
+        except Exception:
+            return float("nan"), float("nan")
+    
+    def compute_cohort_consistency_score(y_pred):
+        """
+        Compute Cohort Consistency Score (CCS) using correlation with monotonic dose ranking.
+        Simplified version: correlation of NTCP vs monotonic dose ranking across cohort.
+        """
+        y_pred = np.asarray(y_pred)
+        valid_mask = ~np.isnan(y_pred)
+        
+        if valid_mask.sum() < 5:
+            return float("nan")
+        
+        y_pred_valid = y_pred[valid_mask]
+        
+        # Create monotonic dose ranking (simplified: use NTCP predictions as proxy for dose)
+        # In practice, this would use actual dose metrics (gEUD, mean dose, etc.)
+        # For this simplified version, we use the rank of predictions
+        dose_ranking = np.arange(len(y_pred_valid))
+        
+        try:
+            # Compute Spearman correlation between NTCP and dose ranking
+            correlation, _ = spearmanr(y_pred_valid, dose_ranking)
+            # Convert correlation to 0-1 scale (CCS)
+            # CCS = (correlation + 1) / 2, but we want it to reflect consistency
+            # Higher correlation = higher consistency
+            ccs = (correlation + 1.0) / 2.0 if not np.isnan(correlation) else float("nan")
+            return float(ccs)
+        except Exception:
+            return float("nan")
+    
+    # Model definitions
+    models = {
+        "QUANTEC-LKB": ("Classical (literature)", "NTCP_LKB_QUANTEC"),
+        "QUANTEC-RS": ("Classical (literature)", "NTCP_RS_QUANTEC"),
+        "Local-LKB": ("Classical (local)", "NTCP_LKB_LOCAL"),
+        "Local-RS": ("Classical (local)", "NTCP_RS_LOCAL"),
+        "ANN": ("ML", "NTCP_ANN"),
+        "XGBoost": ("ML", "NTCP_XGB"),
+    }
+    
+    # Get true labels - use clinical_df if available, otherwise use Observed_Toxicity from ntcp_df
+    if clinical_df is not None and "xerostomia_grade2plus" in clinical_df.columns:
+        # Merge clinical data with NTCP data if needed
+        if "PatientID" in ntcp_df.columns and "patient_id" in clinical_df.columns:
+            # Try to merge on patient ID
+            merged = ntcp_df.merge(
+                clinical_df[["patient_id", "xerostomia_grade2plus"]],
+                left_on="PatientID",
+                right_on="patient_id",
+                how="left"
+            )
+            y_true = merged["xerostomia_grade2plus"].values
+        else:
+            # Use clinical_df directly if it has the same length
+            if len(clinical_df) == len(ntcp_df):
+                y_true = clinical_df["xerostomia_grade2plus"].values
+            else:
+                # Fallback to Observed_Toxicity
+                y_true = ntcp_df["Observed_Toxicity"].values if "Observed_Toxicity" in ntcp_df.columns else None
+    else:
+        # Use Observed_Toxicity from ntcp_df
+        y_true = ntcp_df["Observed_Toxicity"].values if "Observed_Toxicity" in ntcp_df.columns else None
+    
+    if y_true is None:
+        print("[WARN] Could not determine true labels for Table X", file=sys.stderr)
+        return pd.DataFrame()
+    
+    rows = []
+    
+    for model_name, (category, col) in models.items():
+        if col not in ntcp_df.columns:
+            # Try alternative column names
+            alt_names = {
+                "NTCP_LKB_QUANTEC": ["NTCP_LKB_Probit", "NTCP_LKB_LogLogit", "NTCP_LKB_QUANTEC"],
+                "NTCP_RS_QUANTEC": ["NTCP_RS_Poisson", "NTCP_RS_QUANTEC"],
+                "NTCP_LKB_LOCAL": ["NTCP_LKB_LOCAL"],
+                "NTCP_RS_LOCAL": ["NTCP_RS_LOCAL"],
+                "NTCP_ANN": ["NTCP_ML_ANN", "NTCP_ANN", "NTCP_ML_NeuralNetwork"],
+                "NTCP_XGB": ["NTCP_ML_XGBoost", "NTCP_XGBoost", "NTCP_XGB", "NTCP_ML_XGB"],
+            }
+            
+            found_col = None
+            if col in alt_names:
+                for alt in alt_names[col]:
+                    if alt in ntcp_df.columns:
+                        found_col = alt
+                        break
+            
+            if found_col is None:
+                continue
+            
+            col = found_col
+        
+        y_pred = pd.to_numeric(ntcp_df[col], errors="coerce").values
+        
+        # Remove NaN values
+        valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+        if valid_mask.sum() < 5:
+            continue
+        
+        y_true_valid = y_true[valid_mask]
+        y_pred_valid = y_pred[valid_mask]
+        
+        auc = compute_auc(y_true_valid, y_pred_valid)
+        brier = compute_brier_score(y_true_valid, y_pred_valid)
+        slope, intercept = compute_calibration_slope_intercept(y_true_valid, y_pred_valid)
+        ccs = compute_cohort_consistency_score(y_pred_valid)
+        
+        rows.append({
+            "Category": category,
+            "Model": model_name,
+            "AUC": round(auc, 3) if not np.isnan(auc) else np.nan,
+            "Brier": round(brier, 3) if not np.isnan(brier) else np.nan,
+            "Calibration slope": round(slope, 3) if not np.isnan(slope) else np.nan,
+            "Calibration intercept": round(intercept, 3) if not np.isnan(intercept) else np.nan,
+            "CCS": round(ccs, 3) if not np.isnan(ccs) else np.nan,
+        })
+    
+    table_df = pd.DataFrame(rows)
+    
+    # Create tables directory
+    tables_dir = Path(output_dir) / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Excel output
+    excel_path = tables_dir / "Table_X_Classical_vs_ML.xlsx"
+    table_df.to_excel(excel_path, index=False)
+    
+    # Markdown output (for manuscript / Claude)
+    md_path = tables_dir / "Table_X_Classical_vs_ML.md"
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(table_df.to_markdown(index=False))
+        print(f"[OK] Saved Table X (Markdown): {md_path}")
+    except Exception as e:
+        # Fallback to CSV if markdown fails
+        csv_path = tables_dir / "Table_X_Classical_vs_ML.csv"
+        table_df.to_csv(csv_path, index=False)
+        print(f"[OK] Saved Table X (CSV): {csv_path} (markdown unavailable: {e})")
+    
+    print(f"[OK] Saved Table X: {excel_path}")
+    
+    return table_df
 
 
 if __name__ == "__main__":

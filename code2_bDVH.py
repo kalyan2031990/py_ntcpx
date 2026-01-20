@@ -320,26 +320,61 @@ class BiologicalDVHGenerator:
         return bdvh
 
 
-def load_step1_registry(registry_path: Optional[Path] = None) -> Dict[Tuple[str, str], Dict[str, str]]:
+def load_step1_registry(
+    registry_path: Optional[Path] = None,
+    base_output_dir: Optional[Path] = None,
+    output_dir: Optional[Path] = None
+) -> Dict[Tuple[str, str], Dict[str, str]]:
     """
     Load Step1_DVHRegistry.xlsx to lookup PrimaryPatientID and AnonPatientID
     
     Args:
-        registry_path: Path to Step1_DVHRegistry.xlsx (default: out2/contracts/Step1_DVHRegistry.xlsx)
+        registry_path: Path to Step1_DVHRegistry.xlsx (default: base_output_dir/contracts/Step1_DVHRegistry.xlsx)
+        base_output_dir: Base output directory containing contracts folder
+        output_dir: bDVH output directory (used to auto-resolve base_output_dir if not provided)
     
     Returns:
         Dictionary keyed by (DVH_filename, Organ) -> {PrimaryPatientID, AnonPatientID}
     """
     if registry_path is None:
-        # Default location: out2/contracts/Step1_DVHRegistry.xlsx
-        registry_path = Path('out2') / 'contracts' / 'Step1_DVHRegistry.xlsx'
+        if base_output_dir is not None:
+            registry_path = Path(base_output_dir) / 'contracts' / 'Step1_DVHRegistry.xlsx'
+        elif output_dir is not None:
+            # Auto-resolve: walk up from output_dir to find base_output_dir with contracts folder
+            current = Path(output_dir).resolve()
+            max_levels = 5  # Prevent infinite loops
+            level = 0
+            while level < max_levels:
+                contracts_dir = current / 'contracts'
+                if contracts_dir.exists() and (contracts_dir / 'Step1_DVHRegistry.xlsx').exists():
+                    registry_path = contracts_dir / 'Step1_DVHRegistry.xlsx'
+                    logger.info(f"Auto-resolved registry path: {registry_path}")
+                    break
+                parent = current.parent
+                if parent == current:  # Reached filesystem root
+                    break
+                current = parent
+                level += 1
+            
+            if registry_path is None:
+                # Fallback: try common locations
+                for base in [Path('out2'), Path('.'), Path('..')]:
+                    test_path = base.resolve() / 'contracts' / 'Step1_DVHRegistry.xlsx'
+                    if test_path.exists():
+                        registry_path = test_path
+                        logger.info(f"Found registry at fallback location: {registry_path}")
+                        break
+        else:
+            # Legacy fallback (backward compatibility only)
+            registry_path = Path('out2') / 'contracts' / 'Step1_DVHRegistry.xlsx'
     
     registry_path = Path(registry_path)
     lookup = {}
     
     if not registry_path.exists():
-        logger.warning(f"Step1_DVHRegistry.xlsx not found at {registry_path}. Identity lookup will fail.")
-        return lookup
+        logger.error(f"ERROR: Step1_DVHRegistry.xlsx not found at {registry_path}")
+        logger.error("Cannot proceed without identity mapping. Execution STOPPED.")
+        raise FileNotFoundError(f"Step1_DVHRegistry.xlsx not found at {registry_path}. Cannot proceed without identity mapping.")
     
     try:
         with pd.ExcelFile(registry_path) as xl:
@@ -441,7 +476,9 @@ def load_fractionation_data(clinical_file: Optional[Path]) -> Dict[str, Dict[str
 
 def process_bDVH(input_dir: Path, output_dir: Path, 
                 clinical_file: Optional[Path] = None,
-                method: str = 'EQD2') -> None:
+                method: str = 'EQD2',
+                base_output_dir: Optional[Path] = None,
+                registry_path: Optional[Path] = None) -> None:
     """
     Process all dDVH files and generate biological DVH
     
@@ -450,6 +487,8 @@ def process_bDVH(input_dir: Path, output_dir: Path,
         output_dir: Output directory for bDVH files
         clinical_file: Optional Excel file with fractionation data
         method: Transformation method ('BED', 'EQD2', 'gEUD', or 'all')
+        base_output_dir: Base output directory containing contracts folder
+        registry_path: Direct path to Step1_DVHRegistry.xlsx (overrides auto-resolution)
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -461,10 +500,19 @@ def process_bDVH(input_dir: Path, output_dir: Path,
     bdvh_plots_dir.mkdir(parents=True, exist_ok=True)
     
     # Load Step1_DVHRegistry.xlsx for identity lookup
-    step1_registry = load_step1_registry()
-    if not step1_registry:
-        logger.error("Failed to load Step1_DVHRegistry.xlsx. Cannot proceed without identity mapping.")
-        return
+    # Registry is located at base_output_dir/contracts/Step1_DVHRegistry.xlsx
+    try:
+        step1_registry = load_step1_registry(
+            registry_path=registry_path,
+            base_output_dir=base_output_dir,
+            output_dir=output_dir
+        )
+        if not step1_registry:
+            logger.error("ERROR: Step1_DVHRegistry.xlsx lookup returned empty. Cannot proceed without identity mapping.")
+            raise ValueError("Step1_DVHRegistry.xlsx lookup returned empty. Cannot proceed.")
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        raise
     
     # Load fractionation data
     fractionation = load_fractionation_data(clinical_file)
@@ -681,6 +729,20 @@ Software: py_ntcpx v1.0
         help='bDVH transformation method (default: EQD2)'
     )
     
+    parser.add_argument(
+        '--registry_path',
+        type=str,
+        default=None,
+        help='Direct path to Step1_DVHRegistry.xlsx. If not provided, will auto-resolve from output_dir structure.'
+    )
+    
+    parser.add_argument(
+        '--base_output_dir',
+        type=str,
+        default=None,
+        help='Base output directory containing contracts folder. If not provided, will auto-resolve from output_dir.'
+    )
+    
     args = parser.parse_args()
     
     input_dir = Path(args.input_dir).expanduser().resolve()
@@ -698,7 +760,8 @@ Software: py_ntcpx v1.0
     logger.info(f"Output directory: {output_dir}")
     logger.info(f"Method: {args.method}")
     
-    process_bDVH(input_dir, output_dir, clinical_file, args.method)
+    # Registry path will be auto-resolved in process_bDVH
+    process_bDVH(input_dir, output_dir, clinical_file, args.method, base_output_dir=Path(args.base_output_dir).expanduser().resolve() if args.base_output_dir else None, registry_path=Path(args.registry_path).expanduser().resolve() if args.registry_path else None)
     
     logger.info("=" * 60)
     logger.info("bDVH generation completed successfully!")

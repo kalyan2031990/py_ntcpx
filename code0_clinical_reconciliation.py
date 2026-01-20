@@ -88,18 +88,18 @@ class ClinicalReconciler:
             return None
     
     def load_clinical_data(self, clinical_path: Path) -> Optional[pd.DataFrame]:
-        """Load clinical patient data"""
+        """Load clinical patient data (Clinical Contract v2)"""
         if not clinical_path.exists():
             safe_print(f"ERROR: Clinical data file not found: {clinical_path}")
             return None
         
         try:
             with pd.ExcelFile(clinical_path) as xl:
-                # Try to find the right sheet
+                # Try to find the right sheet (check for patient_id, PrimaryPatientID, or PatientID)
                 sheet_name = None
                 for name in xl.sheet_names:
                     df_test = pd.read_excel(xl, sheet_name=name, nrows=5)
-                    if 'PrimaryPatientID' in df_test.columns or 'PatientID' in df_test.columns:
+                    if 'patient_id' in df_test.columns or 'PrimaryPatientID' in df_test.columns or 'PatientID' in df_test.columns:
                         sheet_name = name
                         break
                 
@@ -108,255 +108,208 @@ class ClinicalReconciler:
                 
                 clinical_df = pd.read_excel(xl, sheet_name=sheet_name)
             
+            # Handle backward compatibility: map PrimaryPatientID/PatientID to patient_id if needed
+            if 'patient_id' not in clinical_df.columns:
+                if 'PrimaryPatientID' in clinical_df.columns:
+                    clinical_df['patient_id'] = clinical_df['PrimaryPatientID']
+                elif 'PatientID' in clinical_df.columns:
+                    clinical_df['patient_id'] = clinical_df['PatientID']
+            
             return clinical_df
         except Exception as e:
             safe_print(f"ERROR: Failed to load clinical data: {e}")
             return None
     
+    def validate_clinical_contract_v2(self, clinical_df: pd.DataFrame) -> Tuple[bool, List[str]]:
+        """
+        Validate Clinical Contract v2
+        
+        Mandatory columns:
+        - patient_id: must exist, no missing values
+        - xerostomia_grade2plus: must exist, no missing values, must be 0 or 1
+        - followup_months: must exist, no missing values, must be > 0
+        
+        Returns:
+            (is_valid, list_of_errors)
+        """
+        errors = []
+        
+        # Check mandatory columns exist
+        mandatory_cols = ['patient_id', 'xerostomia_grade2plus', 'followup_months']
+        missing_cols = [col for col in mandatory_cols if col not in clinical_df.columns]
+        if missing_cols:
+            errors.append(f"Missing mandatory columns: {', '.join(missing_cols)}")
+            return False, errors
+        
+        # Check patient_id: no missing values
+        if clinical_df['patient_id'].isna().any():
+            n_missing = clinical_df['patient_id'].isna().sum()
+            errors.append(f"patient_id has {n_missing} missing value(s)")
+        
+        # Check xerostomia_grade2plus: no missing values, must be 0 or 1
+        if clinical_df['xerostomia_grade2plus'].isna().any():
+            n_missing = clinical_df['xerostomia_grade2plus'].isna().sum()
+            errors.append(f"xerostomia_grade2plus has {n_missing} missing value(s)")
+        else:
+            invalid_values = clinical_df[~clinical_df['xerostomia_grade2plus'].isin([0, 1])]
+            if len(invalid_values) > 0:
+                errors.append(f"xerostomia_grade2plus must be 0 or 1, found invalid values in {len(invalid_values)} row(s)")
+        
+        # Check followup_months: no missing values, must be > 0
+        if clinical_df['followup_months'].isna().any():
+            n_missing = clinical_df['followup_months'].isna().sum()
+            errors.append(f"followup_months has {n_missing} missing value(s)")
+        else:
+            invalid_values = clinical_df[clinical_df['followup_months'] <= 0]
+            if len(invalid_values) > 0:
+                errors.append(f"followup_months must be > 0, found invalid values in {len(invalid_values)} row(s)")
+        
+        is_valid = len(errors) == 0
+        return is_valid, errors
+    
     def detect_mismatches(self, registry_df: pd.DataFrame, clinical_df: pd.DataFrame) -> Dict:
-        """Detect all mismatches between registry and clinical data"""
+        """Detect all mismatches between registry and clinical data (Clinical Contract v2)"""
         
         mismatches = {
             'missing_dvhs': [],  # Clinical rows without DVH
             'missing_clinical': [],  # DVHs without clinical data
-            'organ_mismatches': [],  # Same patient, different organs
-            'duplicates': [],  # Duplicate (PrimaryPatientID, Organ) in clinical
-            'missing_primary_id': [],  # Clinical rows missing PrimaryPatientID
-            'missing_organ': [],  # Clinical rows missing Organ
-            'missing_toxicity': []  # Clinical rows missing toxicity column
+            'duplicates': [],  # Duplicate patient_id in clinical
+            'identity_mismatch': False,  # patient_id mismatch with registry
+            'contract_validation_errors': []  # Clinical Contract v2 validation errors
         }
         
-        # Normalize PrimaryPatientID for matching
+        # Step 1: Validate Clinical Contract v2
+        is_valid, contract_errors = self.validate_clinical_contract_v2(clinical_df)
+        if not is_valid:
+            mismatches['contract_validation_errors'] = contract_errors
+            return mismatches, clinical_df
+        
+        # Step 2: Check identity integrity (patient_id must match PrimaryPatientID in registry)
+        # Normalize patient_id for matching
+        clinical_df['patient_id_norm'] = clinical_df['patient_id'].apply(normalize_dvh_id)
         registry_df['PrimaryPatientID_norm'] = registry_df['PrimaryPatientID'].apply(normalize_dvh_id)
         
-        # Check if clinical data has PrimaryPatientID
-        has_primary = 'PrimaryPatientID' in clinical_df.columns
-        has_anon = 'AnonPatientID' in clinical_df.columns
-        has_patient_id = 'PatientID' in clinical_df.columns
+        # Get unique patient IDs from both
+        clinical_patient_ids = set(clinical_df['patient_id_norm'].dropna().unique())
+        registry_patient_ids = set(registry_df['PrimaryPatientID_norm'].dropna().unique())
         
-        # Handle backward compatibility: map AnonPatientID to PrimaryPatientID if needed
-        if not has_primary and has_patient_id:
-            # Check if PatientID looks like AnonPatientID (PT format)
-            sample_pid = clinical_df['PatientID'].dropna().iloc[0] if len(clinical_df['PatientID'].dropna()) > 0 else ""
-            if isinstance(sample_pid, str) and sample_pid.strip().upper().startswith('PT'):
-                # PatientID is AnonPatientID - need to map via registry
-                if 'AnonPatientID' in registry_df.columns and 'Organ' in clinical_df.columns:
-                    mapping_df = registry_df[['PrimaryPatientID', 'AnonPatientID', 'Organ']].drop_duplicates()
-                    clinical_df = pd.merge(
-                        clinical_df,
-                        mapping_df,
-                        left_on=['PatientID', 'Organ'],
-                        right_on=['AnonPatientID', 'Organ'],
-                        how='left',
-                        suffixes=('', '_mapped')
-                    )
-                    if 'PrimaryPatientID_mapped' in clinical_df.columns:
-                        clinical_df['PrimaryPatientID'] = clinical_df['PrimaryPatientID_mapped']
-                        clinical_df = clinical_df.drop(columns=['PrimaryPatientID_mapped'], errors='ignore')
-                        has_primary = clinical_df['PrimaryPatientID'].notna().any()
+        # Check for identity mismatch
+        missing_in_registry = clinical_patient_ids - registry_patient_ids
+        missing_in_clinical = registry_patient_ids - clinical_patient_ids
         
-        # Check for missing PrimaryPatientID
-        if not has_primary or 'PrimaryPatientID' not in clinical_df.columns:
-            mismatches['missing_primary_id'] = list(range(len(clinical_df)))
-            return mismatches, clinical_df
+        if missing_in_registry or missing_in_clinical:
+            mismatches['identity_mismatch'] = True
+            if missing_in_registry:
+                # Find original patient_id values
+                for pid_norm in missing_in_registry:
+                    orig_pid = clinical_df[clinical_df['patient_id_norm'] == pid_norm]['patient_id'].iloc[0] if len(clinical_df[clinical_df['patient_id_norm'] == pid_norm]) > 0 else pid_norm
+                    mismatches['missing_dvhs'].append({'patient_id': orig_pid})
+            
+            if missing_in_clinical:
+                # Find original PrimaryPatientID values
+                for pid_norm in missing_in_clinical:
+                    orig_pid = registry_df[registry_df['PrimaryPatientID_norm'] == pid_norm]['PrimaryPatientID'].iloc[0] if len(registry_df[registry_df['PrimaryPatientID_norm'] == pid_norm]) > 0 else pid_norm
+                    mismatches['missing_clinical'].append({'PrimaryPatientID': orig_pid})
         
-        # Check for missing Organ
-        if 'Organ' not in clinical_df.columns:
-            mismatches['missing_organ'] = list(range(len(clinical_df)))
-            return mismatches, clinical_df
-        
-        # Check for missing toxicity column
-        toxicity_cols = ['Toxicity', 'Observed_Toxicity', 'Endpoint', 'Event']
-        has_toxicity = any(col in clinical_df.columns for col in toxicity_cols)
-        if not has_toxicity:
-            mismatches['missing_toxicity'] = ["Required: One of " + ", ".join(toxicity_cols)]
-            return mismatches, clinical_df
-        
-        # Normalize PrimaryPatientID in clinical data
-        clinical_df['PrimaryPatientID_norm'] = clinical_df['PrimaryPatientID'].apply(normalize_dvh_id)
-        
-        # Build key sets for comparison (PrimaryPatientID + Organ)
-        registry_keys = set(zip(
-            registry_df['PrimaryPatientID_norm'].dropna(),
-            registry_df['Organ'].dropna()
-        ))
-        
-        clinical_keys = set(zip(
-            clinical_df['PrimaryPatientID_norm'].dropna(),
-            clinical_df['Organ'].dropna()
-        ))
-        
-        # Find mismatches
-        missing_dvh_keys = clinical_keys - registry_keys
-        missing_clinical_keys = registry_keys - clinical_keys
-        
-        # Convert keys back to readable format
-        for key in missing_dvh_keys:
-            primary_id_norm, organ = key
-            # Find original PrimaryPatientID from registry
-            primary_id = registry_df[
-                (registry_df['PrimaryPatientID_norm'] == primary_id_norm) &
-                (registry_df['Organ'] == organ)
-            ]['PrimaryPatientID'].iloc[0] if len(registry_df[
-                (registry_df['PrimaryPatientID_norm'] == primary_id_norm) &
-                (registry_df['Organ'] == organ)
-            ]) > 0 else primary_id_norm
-            mismatches['missing_dvhs'].append({'PrimaryPatientID': primary_id, 'Organ': organ})
-        
-        for key in missing_clinical_keys:
-            primary_id_norm, organ = key
-            primary_id = registry_df[
-                (registry_df['PrimaryPatientID_norm'] == primary_id_norm) &
-                (registry_df['Organ'] == organ)
-            ]['PrimaryPatientID'].iloc[0] if len(registry_df[
-                (registry_df['PrimaryPatientID_norm'] == primary_id_norm) &
-                (registry_df['Organ'] == organ)
-            ]) > 0 else primary_id_norm
-            mismatches['missing_clinical'].append({'PrimaryPatientID': primary_id, 'Organ': organ})
-        
-        # Check for duplicates in clinical data
+        # Check for duplicates in clinical data (patient_id)
         if len(clinical_df) > 0:
-            duplicate_mask = clinical_df[['PrimaryPatientID_norm', 'Organ']].duplicated(keep=False)
+            duplicate_mask = clinical_df['patient_id_norm'].duplicated(keep=False)
             if duplicate_mask.any():
-                duplicates = clinical_df[duplicate_mask][['PrimaryPatientID', 'Organ']].drop_duplicates()
-                mismatches['duplicates'] = duplicates.to_dict('records')
-        
-        # Check for organ mismatches (same PrimaryPatientID, different organs in registry vs clinical)
-        if len(clinical_df) > 0:
-            for _, row in clinical_df.iterrows():
-                primary_id_norm = row.get('PrimaryPatientID_norm')
-                clinical_organ = row.get('Organ')
-                
-                if pd.isna(primary_id_norm) or pd.isna(clinical_organ):
-                    continue
-                
-                # Find all organs for this patient in registry
-                registry_organs = set(registry_df[
-                    registry_df['PrimaryPatientID_norm'] == primary_id_norm
-                ]['Organ'].unique())
-                
-                if registry_organs and clinical_organ not in registry_organs:
-                    mismatches['organ_mismatches'].append({
-                        'PrimaryPatientID': row.get('PrimaryPatientID', primary_id_norm),
-                        'Clinical_Organ': clinical_organ,
-                        'Registry_Organs': list(registry_organs)
-                    })
+                duplicates = clinical_df[duplicate_mask]['patient_id'].drop_duplicates().tolist()
+                mismatches['duplicates'] = duplicates
         
         return mismatches, clinical_df
     
-    def generate_reconciled_template(self, registry_df: pd.DataFrame, clinical_df: pd.DataFrame,
-                                    mismatches: Dict) -> pd.DataFrame:
-        """Generate reconciled clinical template using registry as source of truth"""
+    def generate_dynamic_template(self, registry_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate dynamic template with patient_id from registry and optional columns blank
         
-        # Start with registry (source of truth for DVH availability)
-        template_df = registry_df[['PrimaryPatientID', 'Organ']].copy()
+        Returns:
+            DataFrame with columns: patient_id, age, sex, baseline_xerostomia, 
+            tobacco_exposure, chemotherapy, hpv_status, followup_months, xerostomia_grade2plus
+        """
+        # Get unique PrimaryPatientIDs from registry
+        unique_patients = registry_df['PrimaryPatientID'].drop_duplicates().sort_values()
         
-        # Add AnonPatientID if available in registry
-        if 'AnonPatientID' in registry_df.columns:
-            template_df = template_df.merge(
-                registry_df[['PrimaryPatientID', 'Organ', 'AnonPatientID']].drop_duplicates(),
-                on=['PrimaryPatientID', 'Organ'],
-                how='left'
-            )
-        else:
-            template_df['AnonPatientID'] = None
-        
-        # Merge clinical data where keys match
-        if len(clinical_df) > 0 and 'PrimaryPatientID' in clinical_df.columns and 'Organ' in clinical_df.columns:
-            # Normalize for merge
-            clinical_df_norm = clinical_df.copy()
-            clinical_df_norm['PrimaryPatientID_norm'] = clinical_df_norm['PrimaryPatientID'].apply(normalize_dvh_id)
-            registry_df_norm = registry_df.copy()
-            registry_df_norm['PrimaryPatientID_norm'] = registry_df_norm['PrimaryPatientID'].apply(normalize_dvh_id)
-            
-            # Merge on normalized keys
-            template_df_norm = template_df.copy()
-            template_df_norm['PrimaryPatientID_norm'] = template_df_norm['PrimaryPatientID'].apply(normalize_dvh_id)
-            
-            # Merge clinical data
-            clinical_cols_to_merge = [col for col in clinical_df.columns 
-                                     if col not in ['PrimaryPatientID_norm', 'PatientID']]
-            
-            template_df_norm = template_df_norm.merge(
-                clinical_df_norm[['PrimaryPatientID_norm', 'Organ'] + clinical_cols_to_merge],
-                on=['PrimaryPatientID_norm', 'Organ'],
-                how='left',
-                suffixes=('', '_clinical')
-            )
-            
-            # Clean up duplicate columns
-            for col in template_df_norm.columns:
-                if col.endswith('_clinical') and col.replace('_clinical', '') in template_df_norm.columns:
-                    # Keep non-null values from clinical version
-                    base_col = col.replace('_clinical', '')
-                    mask = template_df_norm[base_col].isna() & template_df_norm[col].notna()
-                    template_df_norm[base_col] = template_df_norm[base_col].fillna(template_df_norm[col])
-                    template_df_norm = template_df_norm.drop(columns=[col])
-            
-            template_df = template_df_norm.drop(columns=['PrimaryPatientID_norm'], errors='ignore')
-        else:
-            # No valid clinical data - create empty template
-            template_df['Toxicity'] = None
-            template_df['Observed_Toxicity'] = None
-        
-        # Ensure required columns exist
-        required_cols = ['Toxicity', 'Observed_Toxicity']
-        for col in required_cols:
-            if col not in template_df.columns:
-                template_df[col] = None
-        
-        # Remove duplicates (shouldn't happen, but safety check)
-        template_df = template_df.drop_duplicates(subset=['PrimaryPatientID', 'Organ'])
-        
-        # Sort by PrimaryPatientID and Organ
-        template_df = template_df.sort_values(['PrimaryPatientID', 'Organ']).reset_index(drop=True)
+        # Create template DataFrame
+        template_df = pd.DataFrame({
+            'patient_id': unique_patients.values,
+            'age': None,
+            'sex': None,
+            'baseline_xerostomia': None,
+            'tobacco_exposure': None,
+            'chemotherapy': None,
+            'hpv_status': None,
+            'followup_months': None,
+            'xerostomia_grade2plus': None
+        })
         
         return template_df
     
+    def generate_reconciled_output(self, clinical_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate reconciled output with mandatory columns + optional columns that exist
+        
+        Returns:
+            DataFrame with patient_id, xerostomia_grade2plus, followup_months + optional columns
+        """
+        # Start with mandatory columns
+        reconciled_df = clinical_df[['patient_id', 'xerostomia_grade2plus', 'followup_months']].copy()
+        
+        # Add optional columns if they exist in input
+        optional_cols = ['age', 'sex', 'baseline_xerostomia', 'tobacco_exposure', 
+                        'chemotherapy', 'hpv_status', 'Organ']
+        
+        for col in optional_cols:
+            if col in clinical_df.columns:
+                reconciled_df[col] = clinical_df[col]
+        
+        # Sort by patient_id
+        reconciled_df = reconciled_df.sort_values('patient_id').reset_index(drop=True)
+        
+        return reconciled_df
+    
     def print_mismatch_summary(self, mismatches: Dict):
-        """Print human-readable mismatch summary"""
+        """Print human-readable mismatch summary (Clinical Contract v2)"""
         safe_print("\n" + "="*60)
-        safe_print("CLINICAL RECONCILIATION SUMMARY")
+        safe_print("CLINICAL RECONCILIATION SUMMARY (Contract v2)")
         safe_print("="*60)
         
-        missing_dvhs = len(mismatches.get('missing_dvhs', []))
-        missing_clinical = len(mismatches.get('missing_clinical', []))
-        organ_mismatches = len(mismatches.get('organ_mismatches', []))
-        duplicates = len(mismatches.get('duplicates', []))
-        missing_primary_id = len(mismatches.get('missing_primary_id', []))
-        missing_organ = len(mismatches.get('missing_organ', []))
-        missing_toxicity = len(mismatches.get('missing_toxicity', []))
+        # Contract validation errors
+        contract_errors = mismatches.get('contract_validation_errors', [])
+        if contract_errors:
+            safe_print("\n[CRITICAL] Clinical Contract v2 Validation Failed:")
+            for error in contract_errors:
+                safe_print(f"  - {error}")
         
-        safe_print(f"\nMissing DVHs: {missing_dvhs}")
-        safe_print(f"  (Clinical rows without matching DVH in registry)")
+        # Identity mismatch
+        if mismatches.get('identity_mismatch', False):
+            missing_dvhs = len(mismatches.get('missing_dvhs', []))
+            missing_clinical = len(mismatches.get('missing_clinical', []))
+            
+            safe_print(f"\n[CRITICAL] Identity Mismatch Detected:")
+            safe_print(f"  Missing in registry (no DVH): {missing_dvhs} patient(s)")
+            safe_print(f"  Missing in clinical data: {missing_clinical} patient(s)")
         
-        safe_print(f"\nMissing clinical data: {missing_clinical}")
-        safe_print(f"  (DVHs in registry without matching clinical data)")
-        
-        safe_print(f"\nOrgan mismatches: {organ_mismatches}")
-        safe_print(f"  (Same PrimaryPatientID, different organs)")
-        
-        safe_print(f"\nDuplicate (PrimaryPatientID, Organ): {duplicates}")
-        
-        if missing_primary_id > 0:
-            safe_print(f"\nMissing PrimaryPatientID: {missing_primary_id} rows")
-        
-        if missing_organ > 0:
-            safe_print(f"\nMissing Organ: {missing_organ} rows")
-        
-        if missing_toxicity > 0:
-            safe_print(f"\nMissing toxicity column: {missing_toxicity}")
+        # Duplicates
+        duplicates = mismatches.get('duplicates', [])
+        if duplicates:
+            safe_print(f"\n[ERROR] Duplicate patient_id found: {len(duplicates)}")
+            for dup in duplicates[:5]:  # Show first 5
+                safe_print(f"  - {dup}")
+            if len(duplicates) > 5:
+                safe_print(f"  ... and {len(duplicates) - 5} more")
         
         safe_print("\n" + "="*60)
     
     def reconcile(self, clinical_path: Path, auto_accept: bool = False) -> Tuple[bool, Optional[Path]]:
         """
-        Perform clinical reconciliation
+        Perform clinical reconciliation (Clinical Contract v2)
         
         Returns:
             (success, output_path) tuple
         """
-        safe_print("\n[CODE0] Clinical Data Reconciliation")
+        safe_print("\n[CODE0] Clinical Data Reconciliation (Contract v2)")
         safe_print("="*60)
         
         # Load registry
@@ -381,49 +334,76 @@ class ClinicalReconciler:
         # Print summary
         self.print_mismatch_summary(mismatches)
         
-        # Check if reconciliation needed
-        total_issues = (len(mismatches.get('missing_dvhs', [])) +
-                       len(mismatches.get('organ_mismatches', [])) +
-                       len(mismatches.get('duplicates', [])) +
-                       len(mismatches.get('missing_primary_id', [])) +
-                       len(mismatches.get('missing_organ', [])) +
-                       len(mismatches.get('missing_toxicity', [])))
+        # Check for contract validation errors (STOP if any)
+        contract_errors = mismatches.get('contract_validation_errors', [])
+        if contract_errors:
+            safe_print("\n[STOP] Clinical Contract v2 validation failed. Pipeline stopped.")
+            safe_print("\nGenerating dynamic template...")
+            
+            # Generate dynamic template
+            template_df = self.generate_dynamic_template(registry_df)
+            template_path = self.output_dir / "clinical_template_required.xlsx"
+            
+            with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
+                template_df.to_excel(writer, index=False, sheet_name='ClinicalData')
+            
+            safe_print(f"\nClinical data did not satisfy the contract.")
+            safe_print(f"A valid template has been generated at {template_path}")
+            safe_print(f"Please fill it and rerun.")
+            
+            return False, None
         
-        if total_issues == 0:
-            safe_print("\n[OK] No mismatches detected. Clinical data matches registry.")
-            return True, clinical_path
+        # Check for identity mismatch (STOP if any)
+        if mismatches.get('identity_mismatch', False):
+            safe_print("\n[STOP] Identity mismatch detected. Pipeline stopped.")
+            safe_print("  patient_id in clinical data must match PrimaryPatientID in DVH registry.")
+            safe_print("  No missing, no extra, no duplicates allowed.")
+            
+            # Generate dynamic template
+            template_df = self.generate_dynamic_template(registry_df)
+            template_path = self.output_dir / "clinical_template_required.xlsx"
+            
+            with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
+                template_df.to_excel(writer, index=False, sheet_name='ClinicalData')
+            
+            safe_print(f"\nA valid template has been generated at {template_path}")
+            safe_print(f"Please fill it and rerun.")
+            
+            return False, None
         
-        # Generate reconciled template
-        safe_print("\n[INFO] Generating reconciled clinical template...")
-        reconciled_df = self.generate_reconciled_template(registry_df, clinical_df_processed, mismatches)
+        # Check for duplicates (STOP if any)
+        duplicates = mismatches.get('duplicates', [])
+        if duplicates:
+            safe_print("\n[STOP] Duplicate patient_id found. Pipeline stopped.")
+            safe_print("  Each patient_id must be unique.")
+            
+            # Generate dynamic template
+            template_df = self.generate_dynamic_template(registry_df)
+            template_path = self.output_dir / "clinical_template_required.xlsx"
+            
+            with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
+                template_df.to_excel(writer, index=False, sheet_name='ClinicalData')
+            
+            safe_print(f"\nA valid template has been generated at {template_path}")
+            safe_print(f"Please fill it and rerun.")
+            
+            return False, None
         
-        # Save template
-        template_path = self.output_dir / "clinical_template.xlsx"
-        with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
-            reconciled_df.to_excel(writer, index=False, sheet_name='ClinicalData')
+        # All validations passed - generate reconciled output
+        safe_print("\n[OK] Clinical Contract v2 validation passed.")
+        safe_print("[OK] Identity integrity validated.")
         
-        safe_print(f"Reconciled template saved to: {template_path}")
+        # Generate reconciled output
+        reconciled_df = self.generate_reconciled_output(clinical_df_processed)
         
-        # Prompt user (unless auto_accept)
-        if not auto_accept:
-            safe_print("\nAccept auto-mapping from registry and continue? [Y/N]: ", end='')
-            try:
-                response = input().strip().upper()
-                if response != 'Y':
-                    safe_print("[ABORT] Pipeline aborted by user.")
-                    return False, None
-            except (EOFError, KeyboardInterrupt):
-                safe_print("\n[ABORT] Pipeline aborted.")
-                return False, None
-        
-        # Write corrected clinical file
-        output_path = self.output_dir / "clinical_patient_data_reconciled.xlsx"
+        # Always write reconciled output
+        output_path = self.output_dir / "clinical_reconciled.xlsx"
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             reconciled_df.to_excel(writer, index=False, sheet_name='ClinicalData')
         
         safe_print(f"\n[OK] Reconciled clinical data saved to: {output_path}")
         safe_print(f"  Rows: {len(reconciled_df)}")
-        safe_print(f"  Organs: {', '.join(sorted(reconciled_df['Organ'].unique()))}")
+        safe_print(f"  Columns: {', '.join(reconciled_df.columns.tolist())}")
         
         return True, output_path
 
