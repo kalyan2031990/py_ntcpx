@@ -47,3 +47,11 @@ test_reports/
 
 # Contracts (generated)
 contracts/
+
+# Runtime outputs
+output/
+__pycache__/
+
+# PowerShell transient files
+*.tmp
+

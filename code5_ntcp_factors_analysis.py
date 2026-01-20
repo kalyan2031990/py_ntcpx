@@ -336,6 +336,22 @@ class ClinicalFactorsAnalyzer:
             # Ensure Observed_Toxicity exists and is numeric (NEW)
             self.merged_data = _ensure_observed_toxicity_column(self.merged_data, verbose_prefix=" ")
             
+            # PART 2 FIX: Explicitly define observed_event from xerostomia_grade2plus
+            if 'xerostomia_grade2plus' in self.merged_data.columns:
+                self.merged_data['observed_event'] = self.merged_data['xerostomia_grade2plus'].astype(int)
+                # Also update Observed_Toxicity if it exists
+                if 'Observed_Toxicity' in self.merged_data.columns:
+                    self.merged_data['Observed_Toxicity'] = self.merged_data['observed_event']
+                else:
+                    self.merged_data['Observed_Toxicity'] = self.merged_data['observed_event']
+                print("  [FIX] Using xerostomia_grade2plus as observed_event for correlation analysis")
+            elif 'Observed_Toxicity' in self.merged_data.columns:
+                # Fallback to Observed_Toxicity if xerostomia_grade2plus not found
+                self.merged_data['observed_event'] = self.merged_data['Observed_Toxicity'].astype(int)
+                print("  [INFO] Using Observed_Toxicity as observed_event (xerostomia_grade2plus not found)")
+            else:
+                print("  [WARNING] Neither xerostomia_grade2plus nor Observed_Toxicity found - correlation may fail")
+            
             # Enforce identity contract after merging
             try:
                 from contract_validator import enforce_identity_contract
@@ -521,14 +537,29 @@ class ClinicalFactorsAnalyzer:
             print(f"  Descriptive stats: mean={factor_results['descriptive_stats']['mean']:.2f}, "
                   f"std={factor_results['descriptive_stats']['std']:.2f}, range=[{factor_results['descriptive_stats']['min']:.2f}, {factor_results['descriptive_stats']['max']:.2f}]")
 
-            # Correlation with observed toxicity
-            valid_data = self.merged_data[[factor, 'Observed_Toxicity']].dropna()
+            # Correlation with observed toxicity - use observed_event explicitly
+            event_col = 'observed_event' if 'observed_event' in self.merged_data.columns else 'Observed_Toxicity'
+            if event_col not in self.merged_data.columns:
+                print(f"  Warning: {event_col} not found, skipping correlation")
+                continue
+                
+            valid_data = self.merged_data[[factor, event_col]].dropna()
+            
+            # PART 2 FIX: Validate observed_event is binary and not NaN
+            if valid_data[event_col].isna().any():
+                print(f"  Warning: {event_col} contains NaN values, removing them")
+                valid_data = valid_data[valid_data[event_col].notna()]
+            
+            unique_vals = valid_data[event_col].dropna().unique()
+            if not all(v in [0, 1] for v in unique_vals):
+                print(f"  Warning: {event_col} contains non-binary values: {unique_vals}, skipping correlation")
+                continue
 
             if len(valid_data) > 10:
                 # Point-biserial correlation (continuous vs binary)
                 try:
                     correlation_coef, correlation_p = stats.pointbiserialr(
-                        valid_data['Observed_Toxicity'].astype(float), 
+                        valid_data[event_col].astype(float), 
                         valid_data[factor].astype(float)
                     )
                     factor_results['correlations']['observed_toxicity'] = {
@@ -560,9 +591,14 @@ class ClinicalFactorsAnalyzer:
                         except Exception as e:
                             pass
 
-            # Group comparisons (toxicity vs no toxicity)
-            toxicity_group = self.merged_data[self.merged_data['Observed_Toxicity'] == 1][factor].dropna()
-            no_toxicity_group = self.merged_data[self.merged_data['Observed_Toxicity'] == 0][factor].dropna()
+            # Group comparisons (toxicity vs no toxicity) - use observed_event
+            event_col = 'observed_event' if 'observed_event' in self.merged_data.columns else 'Observed_Toxicity'
+            if event_col in self.merged_data.columns:
+                toxicity_group = self.merged_data[self.merged_data[event_col] == 1][factor].dropna()
+                no_toxicity_group = self.merged_data[self.merged_data[event_col] == 0][factor].dropna()
+            else:
+                toxicity_group = pd.Series(dtype=float)
+                no_toxicity_group = pd.Series(dtype=float)
 
             if len(toxicity_group) > 0 and len(no_toxicity_group) > 0:
                 try:
