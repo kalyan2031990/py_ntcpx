@@ -1,3 +1,6 @@
+# ARCHIVED — FOR REPRODUCIBILITY ONLY
+# Original version: v1.1.0. Canonical versions: v1.2.1, v2.0.0 only.
+#
 # PowerShell script to create APK for py_ntcpx_v1.1.0
 # Requires: Python, buildozer (or alternative APK creation tool)
 

@@ -205,10 +205,10 @@ code4_output/ (existing, unchanged)
 - **CI width 0.10-0.30**: Moderate uncertainty - use with caution
 - **CI width > 0.30**: High uncertainty - prediction unreliable
 
-## Version History
+## Version History (Canonical only)
 
-- **v1.0**: Original py_ntcpx with Tier 1 (QUANTEC) and Tier 4 (AI)
-- **v2.0**: Added Tier 2 (MLE) and Tier 3 (Logistic) - this upgrade
+- **v1.2.1**: Legacy-stable — Tier 1 (QUANTEC) and Tier 4 (AI)
+- **v2.0.0**: Default — Added Tier 2 (MLE) and Tier 3 (Logistic)
 
 ## Contact
 

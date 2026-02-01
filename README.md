@@ -2,6 +2,15 @@
 
 NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, and SHAP-based interpretability.
 
+## Version governance
+
+| Version | Status | Branch/Tag |
+|---------|--------|------------|
+| **v2.0.0** | Default public version | `main` |
+| **v1.2.1** | Frozen, legacy-stable | `v1.2.1` tag |
+
+Only v1.2.1 and v2.0.0 are canonical. For legacy workflows, use `git checkout v1.2.1`. Non-canonical releases are archived in `archive/` for reproducibility only.
+
 ## Quick start
 
 1. Clone:
@@ -38,6 +47,7 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
 | `ntcp_models/`, `quantification/` | NTCP and QUANTEC modules |
 | `scripts/` | Publication checklist, SHAP supplementary |
 | `tests/` | Pytest tests |
+| `archive/` | ARCHIVED — non-canonical release scripts (v1.0.0, v1.1.0) for reproducibility only |
 | `requirements.txt`, `pyproject.toml` | Dependencies and tooling |
 | `CITATION.cff`, `LICENSE` | Citation and license |
 

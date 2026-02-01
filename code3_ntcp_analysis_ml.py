@@ -5304,7 +5304,7 @@ def main():
                         'All predictions are for research purposes only and should not be used for clinical decision-making without proper validation.'
                     )
                     doc.add_paragraph(
-                        'Software: py_ntcpx v1.2.0'
+                        'Software: py_ntcpx v2.0.0'
                     )
                     
                     methods_file = methods_dir / 'methods_models_equations.docx'

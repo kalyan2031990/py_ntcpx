@@ -1,4 +1,4 @@
-﻿# Contributing
+# Contributing
 
 Thanks for your interest in contributing.
 
@@ -20,6 +20,10 @@ Pull Request guidelines
 Code style
 - Use black for formatting and ruff for linting.
 - Follow PEP 8 and add type hints where helpful.
+
+Import policy
+- Archived contents (archive/) are excluded from installation and distribution.
+- Do not import or depend on archived materials for any analysis or results.
 
 Community
 - Be respectful and constructive. See CODE_OF_CONDUCT.md.

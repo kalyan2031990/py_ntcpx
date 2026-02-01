@@ -2,6 +2,10 @@
 requires = [""setuptools>=61.0"", ""wheel""]
 build-backend = ""setuptools.build_meta""
 
+[tool.setuptools.packages.find]
+# Exclude archive/ (non-canonical scripts); only canonical py_ntcpx is installable.
+exclude = [""archive*""]
+
 [project]
 name = ""py_ntcpx""
 version = ""2.0.0""
