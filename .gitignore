@@ -7,7 +7,7 @@ __pycache__/
 *.pyd
 .Python
 
-# Virtual environments
+# Virtual environments (never commit - can be 500MB+)
 .venv/
 env/
 venv/
@@ -47,3 +47,14 @@ test_reports/
 
 # Contracts (generated)
 contracts/
+
+# APK / build artifacts
+bin/
+
+# Cursor / local dev
+.cursor/
+mcps/
+terminals/
+*.env
+.env.*
+!.env.example

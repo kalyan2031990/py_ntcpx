@@ -1,116 +1,79 @@
 #!/usr/bin/env python3
 """
-Run All Tests for py_ntcpx v1.0
-================================
+Run All Tests for py_ntcpx
+==========================
 
-Master test runner that executes all test suites and generates comprehensive reports.
+Runs the full test suite via pytest (same as CI).
+Optionally writes a JUnit-style report to test_reports/.
 
 Usage:
     python run_all_tests.py [--output_dir test_reports] [--verbose]
 
-Software: py_ntcpx v1.0
+Or use pytest directly:
+    pytest -q
+    pytest -v
 """
 
-import sys
 import argparse
+import subprocess
+import sys
 from pathlib import Path
 
-# Windows-safe encoding configuration
+# Windows-safe encoding
 try:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    if hasattr(sys.stderr, 'reconfigure'):
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except (AttributeError, ValueError):
     pass
 
-# Import Windows-safe utilities
-try:
-    from windows_safe_utils import safe_encode_unicode, safe_print
-except ImportError:
-    def safe_encode_unicode(text):
-        replacements = {
-            '✓': '[OK]', '✗': '[FAIL]', '✔': '[PASS]', '❌': '[ERROR]',
-            '→': '->', '↳': '->', '±': '+/-', 'μ': 'mu', 'σ': 'sigma'
-        }
-        result = str(text)
-        for u, a in replacements.items():
-            result = result.replace(u, a)
-        return result
-    def safe_print(*args, **kwargs):
-        safe_args = [safe_encode_unicode(str(arg)) for arg in args]
-        print(*safe_args, **kwargs)
-
-# Import test runners
-try:
-    from test_script_runner import TestReporter
-except ImportError:
-    print("Error: test_script_runner.py not found")
-    sys.exit(1)
-
-try:
-    import test_ntcp_pipeline
-except ImportError:
-    test_ntcp_pipeline = None
-    print("Warning: test_ntcp_pipeline.py not found")
-
-try:
-    import test_data_validation
-except ImportError:
-    test_data_validation = None
-    print("Warning: test_data_validation.py not found")
-
 
 def main():
-    """Main execution"""
     parser = argparse.ArgumentParser(
-        description='Run all tests for py_ntcpx v1.0',
+        description="Run all tests for py_ntcpx via pytest",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Runs comprehensive test suites:
-- Unit tests for all modules
-- Integration tests
-- Data validation tests
-- Script execution tests
-- Module import tests
-- File structure tests
-
-Generates detailed test reports in JSON and text formats.
-
-Software: py_ntcpx v1.0
-        """
+        epilog=__doc__,
     )
-    
     parser.add_argument(
-        '--output_dir',
+        "--output_dir",
         type=str,
-        default='test_reports',
-        help='Output directory for test reports (default: test_reports)'
+        default="test_reports",
+        help="Directory for test reports (default: test_reports)",
     )
-    
     parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Verbose output'
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Verbose pytest output",
     )
-    
     args = parser.parse_args()
-    
-    # Create test reporter
-    reporter = TestReporter(args.output_dir)
-    
-    # Run all tests
-    success = reporter.run_all_tests()
-    
-    # Print final status
-    if success:
-        safe_print("\n[OK] All tests passed!")
-        return 0
-    else:
-        safe_print("\n[FAIL] Some tests failed. Check test reports for details.")
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = out_dir / "pytest_report.xml"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/",
+        "test_ntcp_pipeline.py",
+        "test_data_validation.py",
+        "--tb=short",
+        "-q" if not args.verbose else "-v",
+        f"--junitxml={report_path}",
+    ]
+
+    try:
+        result = subprocess.run(cmd)
+    except FileNotFoundError:
+        print("pytest not found. Install with: pip install pytest")
         return 1
+    if result.returncode == 0:
+        print(f"\nTest report: {report_path}")
+    return result.returncode
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())
-

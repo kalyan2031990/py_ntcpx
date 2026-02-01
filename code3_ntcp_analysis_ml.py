@@ -762,6 +762,8 @@ class MachineLearningModels:
                 )
                 ann_model = ml_model.create_ann_model()
                 print(f"       EPV: {ml_model.epv:.2f} events per variable")
+                # Fit the model before using it
+                ann_model.fit(X_train, y_train)
             except Exception as e:
                 print(f"     Warning: OverfitResistantMLModels failed: {e}, using basic model")
                 ann_model = self.train_ann_model(X_train, y_train, organ)
@@ -829,6 +831,9 @@ class MachineLearningModels:
                             random_seed=self.random_state
                         )
                     xgb_model = ml_model.create_xgboost_model()
+                    # Fit the model before using it
+                    if xgb_model is not None:
+                        xgb_model.fit(X_train, y_train)
                 except Exception as e:
                     print(f"     Warning: OverfitResistantMLModels XGBoost failed: {e}, using basic model")
                     xgb_model = self.train_xgboost_model(X_train, y_train, organ)
@@ -2818,6 +2823,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     result_row['ProbNTCP_Mean'] = prob_ntcp['mean']
                     result_row['ProbNTCP_CI_L'] = prob_ntcp['ci_lower']
                     result_row['ProbNTCP_CI_U'] = prob_ntcp['ci_upper']
+                    result_row['Prob_gEUD_mean'] = prob_ntcp['mean']
+                    result_row['Prob_gEUD_std'] = prob_ntcp['std']
                     # Keep old field names for backward compatibility
                     result_row['NTCP_Probabilistic_gEUD'] = prob_ntcp['mean']
                     result_row['NTCP_Probabilistic_gEUD_std'] = prob_ntcp['std']
@@ -2829,10 +2836,14 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                 result_row['ProbNTCP_Mean'] = None
                 result_row['ProbNTCP_CI_L'] = None
                 result_row['ProbNTCP_CI_U'] = None
+                result_row['Prob_gEUD_mean'] = None
+                result_row['Prob_gEUD_std'] = None
         else:
             result_row['ProbNTCP_Mean'] = None
             result_row['ProbNTCP_CI_L'] = None
             result_row['ProbNTCP_CI_U'] = None
+            result_row['Prob_gEUD_mean'] = None
+            result_row['Prob_gEUD_std'] = None
         
         if MonteCarloNTCPModel is not None and organ in ntcp_calc.literature_params:
             try:
@@ -2849,6 +2860,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     result_row['MC_NTCP_Mean'] = mc_ntcp['mean']
                     result_row['MC_NTCP_CI_L'] = mc_ntcp['ci_lower']
                     result_row['MC_NTCP_CI_U'] = mc_ntcp['ci_upper']
+                    result_row['MonteCarlo_NTCP_mean'] = mc_ntcp['mean']
+                    result_row['MonteCarlo_NTCP_std'] = mc_ntcp['std']
                     # Keep old field names for backward compatibility
                     result_row['NTCP_MonteCarlo'] = mc_ntcp['mean']
                     result_row['NTCP_MonteCarlo_std'] = mc_ntcp['std']
@@ -2860,11 +2873,31 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                 result_row['MC_NTCP_Mean'] = None
                 result_row['MC_NTCP_CI_L'] = None
                 result_row['MC_NTCP_CI_U'] = None
+                result_row['MonteCarlo_NTCP_mean'] = None
+                result_row['MonteCarlo_NTCP_std'] = None
         else:
             result_row['MC_NTCP_Mean'] = None
             result_row['MC_NTCP_CI_L'] = None
             result_row['MC_NTCP_CI_U'] = None
-        
+            result_row['MonteCarlo_NTCP_mean'] = None
+            result_row['MonteCarlo_NTCP_std'] = None
+
+        # Compute and store Uncertainty-Aware NTCP (inverse variance weighting of Prob gEUD and Monte Carlo)
+        prob_geud_mean = result_row.get('Prob_gEUD_mean')
+        prob_geud_std = result_row.get('Prob_gEUD_std')
+        mc_mean = result_row.get('MonteCarlo_NTCP_mean')
+        mc_std = result_row.get('MonteCarlo_NTCP_std')
+        if (prob_geud_mean is not None and mc_mean is not None and
+                prob_geud_std is not None and mc_std is not None):
+            if prob_geud_std > 0 and mc_std > 0:
+                w_prob = 1.0 / (prob_geud_std ** 2)
+                w_mc = 1.0 / (mc_std ** 2)
+                uNTCP = (prob_geud_mean * w_prob + mc_mean * w_mc) / (w_prob + w_mc)
+            else:
+                uNTCP = (prob_geud_mean + mc_mean) / 2
+            result_row['uNTCP'] = uNTCP
+        # else: preserve existing uNTCP from untcp_calc (set earlier)
+
         results.append(result_row)
     
     # Convert to DataFrame

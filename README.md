@@ -1,48 +1,64 @@
-﻿# NTCP Analysis Pipeline
+# py_ntcpx — NTCP Analysis Pipeline (v2.0.0)
 
-Short description
-- Purpose: NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer. Includes uncertainty features and SHAP interpretability pipeline.
+NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, and SHAP-based interpretability.
 
-Quickstart
+## Quick start
+
 1. Clone:
+   ```bash
    git clone https://github.com/kalyan2031990/py_ntcpx.git
    cd py_ntcpx
+   ```
 2. Create a virtual environment:
+   ```bash
    python -m venv .venv
-   source .venv/bin/activate   # macOS / Linux
-   .venv\Scripts\activate      # Windows (PowerShell)
-3. Install:
+   # macOS / Linux:  source .venv/bin/activate
+   # Windows:       .venv\Scripts\activate
+   ```
+3. Install dependencies:
+   ```bash
    pip install --upgrade pip
    pip install -r requirements.txt
+   ```
 4. Run tests:
+   ```bash
    pytest -q
-5. Run example pipeline:
-   python run_pipeline.py --config configs/example.yaml
+   ```
+5. Run pipeline (DVH text directory and patient Excel required):
+   ```bash
+   python run_pipeline.py --input_txt_dir <path/to/dvh_txt> --patient_data <path/to/patient_data.xlsx> [--output_dir out2]
+   ```
 
-Repository layout (recommended)
-- py_ntcpx/                  â€” Python package (refactor large scripts here)
-- scripts/                   â€” CLI wrappers and convenience scripts
-- tests/                     â€” Tests (pytest)
-- docs/                      â€” Documentation and examples
-- requirements.txt           â€” pinned deps for quick install
-- CITATION.cff               â€” citation file
-- LICENSE                    â€” license text
+## Repository layout
 
-Maintenance & CI
-- Tests run via GitHub Actions (.github/workflows/ci.yml)
-- Style & linting: black, ruff (see pyproject.toml)
+| Path | Description |
+|------|-------------|
+| `src/` | Validation, models, reporting, features |
+| `config/` | `pipeline_config.yaml` |
+| `ntcp_models/`, `quantification/` | NTCP and QUANTEC modules |
+| `scripts/` | Publication checklist, SHAP supplementary |
+| `tests/` | Pytest tests |
+| `requirements.txt`, `pyproject.toml` | Dependencies and tooling |
+| `CITATION.cff`, `LICENSE` | Citation and license |
 
-Contributing
-- Please read CONTRIBUTING.md for workflow, tests, and code style.
-- Use a topic branch and open a PR against main.
+## CI and maintenance
 
-Privacy & data
-- Clinical datasets must be fully de-identified and shared only under appropriate approvals. See PRIVACY_CHECKLIST.md and CODE_AVAILABILITY.md in the repository for details.
+- Tests: GitHub Actions (`.github/workflows/ci.yml`)
+- Style: black, ruff (see `pyproject.toml`)
 
-License & citation
-- This repository is distributed under the terms in the LICENSE file.
-- Cite this work using CITATION.cff.
+## Contributing
 
-Contact / Maintainers
-- Maintained by: kalyan2031990
-- Open an issue to request features or report bugs.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow, tests, and code style. Use a topic branch and open a PR against `main`.
+
+## Privacy and data
+
+Clinical datasets must be fully de-identified and shared only under appropriate approvals. See CONTRIBUTING.md and LICENSE for details.
+
+## License and citation
+
+- License: see [LICENSE](LICENSE).
+- Citation: [CITATION.cff](CITATION.cff).
+
+## Contact
+
+Maintained by **kalyan2031990**. Open an issue for feature requests or bug reports.

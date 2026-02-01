@@ -10,3 +10,4 @@ openpyxl
 shap
 lime
 lightgbm
+pytest
