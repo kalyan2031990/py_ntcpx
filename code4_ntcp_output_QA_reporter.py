@@ -41,6 +41,13 @@ except (AttributeError, ValueError):
 import numpy as np
 import pandas as pd
 
+# Import v2.0 leakage detection
+try:
+    from src.reporting.leakage_detector import DataLeakageDetector
+    V2_LEAKAGE_DETECTOR_AVAILABLE = True
+except ImportError:
+    V2_LEAKAGE_DETECTOR_AVAILABLE = False
+
 # Optional deps: if unavailable, the script will print a helpful error.
 try:
     from sklearn.metrics import roc_curve, auc, brier_score_loss
@@ -430,6 +437,52 @@ def main():
 
         doc.add_heading("5) ML Overfitting/Leakage Heuristics (Applied)", level=1)
         doc.add_paragraph("Flagged when AUC ≥ 0.90 with n < 40 or events < 8. High discrimination in small/low‑event cohorts suggests optimism or leakage.")
+        
+        # V2.0: Data Leakage Detection
+        if V2_LEAKAGE_DETECTOR_AVAILABLE and combined is not None:
+            doc.add_heading("6) Data Leakage Detection (v2.0)", level=1)
+            leakage_detector = DataLeakageDetector()
+            
+            # Check for train/test split information in results
+            # Look for columns that might indicate train/test split
+            has_split_info = any(col.lower() in ['split', 'train', 'test', 'fold'] for col in combined.columns)
+            
+            if has_split_info or 'PrimaryPatientID' in combined.columns:
+                # Try to detect potential leakage
+                if 'PrimaryPatientID' in combined.columns:
+                    # Check for duplicate patients across what might be train/test
+                    patient_counts = combined.groupby('PrimaryPatientID').size()
+                    duplicate_patients = patient_counts[patient_counts > 1]
+                    
+                    if len(duplicate_patients) > 0:
+                        # Check if these duplicates span what might be train/test
+                        leakage_detector.warnings.append(
+                            f"Found {len(duplicate_patients)} patients with multiple entries. "
+                            "This may indicate data leakage if same patients appear in both train and test sets."
+                        )
+                    
+                    # Basic check: ensure patient-level integrity
+                    leakage_detector.checks_performed.append(
+                        f"Patient ID column found: {len(combined['PrimaryPatientID'].unique())} unique patients"
+                    )
+                
+                leakage_report = leakage_detector.generate_report()
+                
+                if leakage_report['has_warnings'] or leakage_report['errors']:
+                    doc.add_paragraph("⚠️ Data Leakage Warnings Detected:")
+                    for warning in leakage_report['warnings']:
+                        doc.add_paragraph(f"• {warning}", style='List Bullet')
+                    for error in leakage_report['errors']:
+                        doc.add_paragraph(f"• {error}", style='List Bullet')
+                else:
+                    doc.add_paragraph("✓ No data leakage detected in available data.")
+                    doc.add_paragraph("Note: Full leakage detection requires access to train/test split information.")
+            else:
+                doc.add_paragraph("Data leakage detection requires PrimaryPatientID column or train/test split information.")
+                doc.add_paragraph("Current data does not contain sufficient information for leakage detection.")
+        else:
+            doc.add_heading("6) Data Leakage Detection", level=1)
+            doc.add_paragraph("v2.0 leakage detection components not available. Install v2.0 components for enhanced leakage detection.")
 
         doc.save(docx_path)
 

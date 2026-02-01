@@ -1,10 +1,14 @@
-﻿[build-system]
+[build-system]
 requires = [""setuptools>=61.0"", ""wheel""]
 build-backend = ""setuptools.build_meta""
 
+[tool.setuptools.packages.find]
+# Exclude archive/ (non-canonical scripts); only canonical py_ntcpx is installable.
+exclude = [""archive*""]
+
 [project]
 name = ""py_ntcpx""
-version = ""0.1.0""
+version = ""2.0.0""
 description = ""NTCP analysis and ML pipeline for head & neck cancer""
 authors = [{name = ""kalyan2031990""}]
 readme = ""README.md""

@@ -35,6 +35,19 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import v2.0 components for data leakage prevention and overfitting control
+try:
+    from src.validation.data_splitter import PatientDataSplitter
+    from src.models.machine_learning.ml_models import OverfitResistantMLModels
+    from src.features.feature_selector import RadiobiologyGuidedFeatureSelector
+    from src.metrics.auc_calculator import calculate_auc_with_ci
+    from src.reporting.leakage_detector import DataLeakageDetector
+    V2_COMPONENTS_AVAILABLE = True
+except ImportError as e:
+    V2_COMPONENTS_AVAILABLE = False
+    print(f"Warning: v2.0 components not available: {e}")
+    print("Falling back to basic implementation. Install v2.0 components for enhanced features.")
+
 # Windows-safe encoding configuration
 try:
     if hasattr(sys.stdout, 'reconfigure'):
@@ -638,33 +651,124 @@ class MachineLearningModels:
         
         print(f"   Training ML models for {organ}...")
         
-        # Prepare features
-        X, y, feature_cols = self.prepare_features(organ_data)
+        # Check if v2.0 components are available
+        use_v2_components = V2_COMPONENTS_AVAILABLE and 'PrimaryPatientID' in organ_data.columns
         
-        if X is None:
-            print(f"    Warning: Insufficient data for ML models")
-            return {}
+        if use_v2_components:
+            # V2.0: Patient-level splitting to prevent data leakage
+            print(f"     Using v2.0 patient-level splitting...")
+            
+            # Validate we have PrimaryPatientID for patient-level splitting
+            if 'PrimaryPatientID' not in organ_data.columns:
+                print(f"     Warning: PrimaryPatientID not found, falling back to row-level split")
+                use_v2_components = False
         
-        n_events = y.sum()
-        n_samples = len(y)
-        
-        print(f"     Features: {len(feature_cols)}, Samples: {n_samples}, Events: {int(n_events)}")
+        if use_v2_components:
+            # PATIENT-LEVEL SPLITTING (v2.0 - prevents data leakage)
+            splitter = PatientDataSplitter(random_seed=self.random_state, test_size=0.2)
+            train_df, test_df = splitter.create_splits(
+                organ_data,
+                patient_id_col='PrimaryPatientID',
+                outcome_col='Observed_Toxicity'
+            )
+            
+            # Check for leakage
+            leakage_detector = DataLeakageDetector()
+            leakage_check = leakage_detector.check_patient_overlap(
+                train_df, test_df, 'PrimaryPatientID'
+            )
+            if not leakage_check:
+                leakage_report = leakage_detector.generate_report()
+                print(f"     WARNING: {leakage_report['errors']}")
+            
+            # Extract features AFTER split (prevents leakage)
+            X_train_df, y_train_series, feature_cols = self.prepare_features(train_df)
+            X_test_df, y_test_series, _ = self.prepare_features(test_df)
+            
+            if X_train_df is None or X_test_df is None:
+                print(f"    Warning: Insufficient data after patient-level split")
+                return {}
+            
+            # Convert to numpy arrays
+            X_train = X_train_df.values
+            X_test = X_test_df.values
+            y_train = y_train_series.values
+            y_test = y_test_series.values
+            
+            n_events = y_train.sum()
+            n_samples = len(y_train)
+            
+            print(f"     Features: {len(feature_cols)}, Train Samples: {len(y_train)}, Events: {int(n_events)}")
+            print(f"     Test Samples: {len(y_test)}, Test Events: {int(y_test.sum())}")
+            
+        else:
+            # FALLBACK: Row-level splitting (original method)
+            print(f"     Using row-level splitting (v2.0 components not available)...")
+            
+            # Prepare features
+            X, y, feature_cols = self.prepare_features(organ_data)
+            
+            if X is None:
+                print(f"    Warning: Insufficient data for ML models")
+                return {}
+            
+            n_events = y.sum()
+            n_samples = len(y)
+            
+            print(f"     Features: {len(feature_cols)}, Samples: {n_samples}, Events: {int(n_events)}")
+            
+            # Use stratified train-test split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X.values if hasattr(X, 'values') else X,
+                y.values if hasattr(y, 'values') else y,
+                test_size=0.3, random_state=self.random_state, 
+                stratify=y if n_events >= 3 else None
+            )
         
         if n_events < 5 or n_samples < 20:
             print(f"    Warning: Insufficient events/samples for reliable ML training")
             return {}
         
-        # Use stratified train-test split to prevent data leakage
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.3, random_state=self.random_state, 
-            stratify=y if n_events >= 3 else None
-        )
-        
         results = {}
+        
+        # V2.0: Feature selection before training (if available)
+        if use_v2_components and len(feature_cols) > 3:
+            try:
+                selector = RadiobiologyGuidedFeatureSelector()
+                X_train_df = pd.DataFrame(X_train, columns=feature_cols)
+                selected_features = selector.select_features(X_train_df, y_train, organ=organ)
+                
+                if len(selected_features) < len(feature_cols):
+                    # Use only selected features
+                    selected_indices = [i for i, f in enumerate(feature_cols) if f in selected_features]
+                    X_train = X_train[:, selected_indices]
+                    X_test = X_test[:, selected_indices]
+                    feature_cols = selected_features
+                    print(f"     Selected {len(selected_features)} features: {selected_features[:5]}...")
+            except Exception as e:
+                print(f"     Warning: Feature selection failed: {e}, using all features")
         
         # Train ANN
         print(f"     Training ANN...")
-        ann_model = self.train_ann_model(X_train, y_train, organ)
+        
+        # V2.0: Use OverfitResistantMLModels if available
+        if use_v2_components:
+            try:
+                ml_model = OverfitResistantMLModels(
+                    n_features=X_train.shape[1],
+                    n_samples=len(X_train),
+                    n_events=int(np.sum(y_train)),
+                    random_seed=self.random_state
+                )
+                ann_model = ml_model.create_ann_model()
+                print(f"       EPV: {ml_model.epv:.2f} events per variable")
+                # Fit the model before using it
+                ann_model.fit(X_train, y_train)
+            except Exception as e:
+                print(f"     Warning: OverfitResistantMLModels failed: {e}, using basic model")
+                ann_model = self.train_ann_model(X_train, y_train, organ)
+        else:
+            ann_model = self.train_ann_model(X_train, y_train, organ)
         
         if ann_model is not None:
             # Evaluate on test set
@@ -673,7 +777,20 @@ class MachineLearningModels:
             # Calculate metrics
             try:
                 fpr, tpr, _ = roc_curve(y_test, y_pred_ann)
-                auc_ann = auc(fpr, tpr)
+                
+                # V2.0: AUC with confidence intervals
+                if use_v2_components:
+                    try:
+                        auc_ann, auc_ci = calculate_auc_with_ci(y_test, y_pred_ann)
+                        print(f"       ANN - Test AUC: {auc_ann:.3f} (95% CI: {auc_ci[0]:.3f}-{auc_ci[1]:.3f})")
+                    except Exception as e:
+                        print(f"     Warning: AUC CI calculation failed: {e}")
+                        auc_ann = auc(fpr, tpr)
+                        auc_ci = (auc_ann, auc_ann)
+                else:
+                    auc_ann = auc(fpr, tpr)
+                    auc_ci = (auc_ann, auc_ann)
+                
                 brier_ann = brier_score_loss(y_test, y_pred_ann)
                 
                 # Cross-validation on training set
@@ -683,15 +800,18 @@ class MachineLearningModels:
                 results['ANN'] = {
                     'model': ann_model,
                     'test_AUC': auc_ann,
+                    'test_AUC_CI': auc_ci if use_v2_components else None,
                     'test_Brier': brier_ann,
                     'cv_AUC_mean': np.mean(cv_scores),
                     'cv_AUC_std': np.std(cv_scores),
                     'n_train': len(X_train),
                     'n_test': len(X_test),
-                    'feature_names': feature_cols
+                    'feature_names': feature_cols,
+                    'epv': ml_model.epv if use_v2_components and 'ml_model' in locals() else None
                 }
                 
-                print(f"       ANN - Test AUC: {auc_ann:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
+                if not use_v2_components or 'auc_ci' not in locals():
+                    print(f"       ANN - Test AUC: {auc_ann:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
                 
             except Exception as e:
                 print(f"      Error: ANN evaluation failed: {e}")
@@ -699,7 +819,26 @@ class MachineLearningModels:
         # Train XGBoost
         if XGBOOST_AVAILABLE:
             print(f"     Training XGBoost...")
-            xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            
+            # V2.0: Use OverfitResistantMLModels if available
+            if use_v2_components:
+                try:
+                    if 'ml_model' not in locals():
+                        ml_model = OverfitResistantMLModels(
+                            n_features=X_train.shape[1],
+                            n_samples=len(X_train),
+                            n_events=int(np.sum(y_train)),
+                            random_seed=self.random_state
+                        )
+                    xgb_model = ml_model.create_xgboost_model()
+                    # Fit the model before using it
+                    if xgb_model is not None:
+                        xgb_model.fit(X_train, y_train)
+                except Exception as e:
+                    print(f"     Warning: OverfitResistantMLModels XGBoost failed: {e}, using basic model")
+                    xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            else:
+                xgb_model = self.train_xgboost_model(X_train, y_train, organ)
             
             if xgb_model is not None:
                 # Evaluate on test set
@@ -707,7 +846,20 @@ class MachineLearningModels:
                 
                 try:
                     fpr, tpr, _ = roc_curve(y_test, y_pred_xgb)
-                    auc_xgb = auc(fpr, tpr)
+                    
+                    # V2.0: AUC with confidence intervals
+                    if use_v2_components:
+                        try:
+                            auc_xgb, auc_ci = calculate_auc_with_ci(y_test, y_pred_xgb)
+                            print(f"       XGBoost - Test AUC: {auc_xgb:.3f} (95% CI: {auc_ci[0]:.3f}-{auc_ci[1]:.3f})")
+                        except Exception as e:
+                            print(f"     Warning: AUC CI calculation failed: {e}")
+                            auc_xgb = auc(fpr, tpr)
+                            auc_ci = (auc_xgb, auc_xgb)
+                    else:
+                        auc_xgb = auc(fpr, tpr)
+                        auc_ci = (auc_xgb, auc_xgb)
+                    
                     brier_xgb = brier_score_loss(y_test, y_pred_xgb)
                     
                     # Cross-validation on training set
@@ -720,16 +872,19 @@ class MachineLearningModels:
                     results['XGBoost'] = {
                         'model': xgb_model,
                         'test_AUC': auc_xgb,
+                        'test_AUC_CI': auc_ci if use_v2_components else None,
                         'test_Brier': brier_xgb,
                         'cv_AUC_mean': np.mean(cv_scores),
                         'cv_AUC_std': np.std(cv_scores),
                         'n_train': len(X_train),
                         'n_test': len(X_test),
                         'feature_names': feature_cols,
-                        'feature_importance': feature_importance
+                        'feature_importance': feature_importance,
+                        'epv': ml_model.epv if use_v2_components and 'ml_model' in locals() else None
                     }
                     
-                    print(f"       XGBoost - Test AUC: {auc_xgb:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
+                    if not use_v2_components or 'auc_ci' not in locals():
+                        print(f"       XGBoost - Test AUC: {auc_xgb:.3f}, CV AUC: {np.mean(cv_scores):.3f}+/-{np.std(cv_scores):.3f}")
                     
                     # Show top features
                     top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -2668,6 +2823,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     result_row['ProbNTCP_Mean'] = prob_ntcp['mean']
                     result_row['ProbNTCP_CI_L'] = prob_ntcp['ci_lower']
                     result_row['ProbNTCP_CI_U'] = prob_ntcp['ci_upper']
+                    result_row['Prob_gEUD_mean'] = prob_ntcp['mean']
+                    result_row['Prob_gEUD_std'] = prob_ntcp['std']
                     # Keep old field names for backward compatibility
                     result_row['NTCP_Probabilistic_gEUD'] = prob_ntcp['mean']
                     result_row['NTCP_Probabilistic_gEUD_std'] = prob_ntcp['std']
@@ -2679,10 +2836,14 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                 result_row['ProbNTCP_Mean'] = None
                 result_row['ProbNTCP_CI_L'] = None
                 result_row['ProbNTCP_CI_U'] = None
+                result_row['Prob_gEUD_mean'] = None
+                result_row['Prob_gEUD_std'] = None
         else:
             result_row['ProbNTCP_Mean'] = None
             result_row['ProbNTCP_CI_L'] = None
             result_row['ProbNTCP_CI_U'] = None
+            result_row['Prob_gEUD_mean'] = None
+            result_row['Prob_gEUD_std'] = None
         
         if MonteCarloNTCPModel is not None and organ in ntcp_calc.literature_params:
             try:
@@ -2699,6 +2860,8 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     result_row['MC_NTCP_Mean'] = mc_ntcp['mean']
                     result_row['MC_NTCP_CI_L'] = mc_ntcp['ci_lower']
                     result_row['MC_NTCP_CI_U'] = mc_ntcp['ci_upper']
+                    result_row['MonteCarlo_NTCP_mean'] = mc_ntcp['mean']
+                    result_row['MonteCarlo_NTCP_std'] = mc_ntcp['std']
                     # Keep old field names for backward compatibility
                     result_row['NTCP_MonteCarlo'] = mc_ntcp['mean']
                     result_row['NTCP_MonteCarlo_std'] = mc_ntcp['std']
@@ -2710,11 +2873,31 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                 result_row['MC_NTCP_Mean'] = None
                 result_row['MC_NTCP_CI_L'] = None
                 result_row['MC_NTCP_CI_U'] = None
+                result_row['MonteCarlo_NTCP_mean'] = None
+                result_row['MonteCarlo_NTCP_std'] = None
         else:
             result_row['MC_NTCP_Mean'] = None
             result_row['MC_NTCP_CI_L'] = None
             result_row['MC_NTCP_CI_U'] = None
-        
+            result_row['MonteCarlo_NTCP_mean'] = None
+            result_row['MonteCarlo_NTCP_std'] = None
+
+        # Compute and store Uncertainty-Aware NTCP (inverse variance weighting of Prob gEUD and Monte Carlo)
+        prob_geud_mean = result_row.get('Prob_gEUD_mean')
+        prob_geud_std = result_row.get('Prob_gEUD_std')
+        mc_mean = result_row.get('MonteCarlo_NTCP_mean')
+        mc_std = result_row.get('MonteCarlo_NTCP_std')
+        if (prob_geud_mean is not None and mc_mean is not None and
+                prob_geud_std is not None and mc_std is not None):
+            if prob_geud_std > 0 and mc_std > 0:
+                w_prob = 1.0 / (prob_geud_std ** 2)
+                w_mc = 1.0 / (mc_std ** 2)
+                uNTCP = (prob_geud_mean * w_prob + mc_mean * w_mc) / (w_prob + w_mc)
+            else:
+                uNTCP = (prob_geud_mean + mc_mean) / 2
+            result_row['uNTCP'] = uNTCP
+        # else: preserve existing uNTCP from untcp_calc (set earlier)
+
         results.append(result_row)
     
     # Convert to DataFrame
@@ -5121,7 +5304,7 @@ def main():
                         'All predictions are for research purposes only and should not be used for clinical decision-making without proper validation.'
                     )
                     doc.add_paragraph(
-                        'Software: py_ntcpx v1.2.0'
+                        'Software: py_ntcpx v2.0.0'
                     )
                     
                     methods_file = methods_dir / 'methods_models_equations.docx'

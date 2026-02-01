@@ -7,7 +7,7 @@ __pycache__/
 *.pyd
 .Python
 
-# Virtual environments
+# Virtual environments (never commit - can be 500MB+)
 .venv/
 env/
 venv/
@@ -39,6 +39,7 @@ analysis_out/
 QA_results/
 clinical_factors_analysis/
 out2/
+output/
 *.zip
 
 # Test outputs
@@ -48,12 +49,6 @@ test_reports/
 # Contracts (generated)
 contracts/
 
-# Runtime outputs
-output/
-
-# Python cache
-__pycache__/
-
 # NTCP temporary artifacts
 *.tmp
 *.cache
@@ -61,3 +56,13 @@ __pycache__/
 # Packaging scripts
 create_apk.ps1
 
+# APK / build artifacts
+bin/
+
+# Cursor / local dev
+.cursor/
+mcps/
+terminals/
+*.env
+.env.*
+!.env.example
