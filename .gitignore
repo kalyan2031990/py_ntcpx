@@ -66,3 +66,18 @@ terminals/
 *.env
 .env.*
 !.env.example
+
+# Development/backup files (not for production)
+*_backup.py
+*_v1.2.1.py
+*_v2.0.0.py
+extract_*.py
+generate_report.py
+test_cv_approaches.py
+test_feature_fix.py
+*.diff
+ml_code_comparison.diff
+
+# Log files (already covered by *.log but explicit)
+full_pipeline_run.log
+pipeline_with_fixes.log
