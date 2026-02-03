@@ -88,6 +88,8 @@ FIXES_AND_IMPROVEMENTS.md
 GIT_*.md
 GITHUB_*.md
 *_COMPLETE_RESULTS_REPORT.md
+CLEANUP_*.md
+RELEASE_NOTES_*_CLEAN.md
 
 # Log files (already covered by *.log but explicit)
 full_pipeline_run.log
