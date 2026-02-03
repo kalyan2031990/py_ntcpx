@@ -136,7 +136,28 @@ class OverfitResistantMLModels:
         if not XGBOOST_AVAILABLE:
             return None
         
-        return xgb.XGBClassifier(**self.XGBOOST_CONFIG)
+        # Adjust for class imbalance if needed
+        config = self.XGBOOST_CONFIG.copy()
+        
+        # For small datasets, use even more conservative settings
+        if self.n_samples < 100:
+            config['max_depth'] = 2
+            config['n_estimators'] = 30
+            config['min_child_weight'] = 5  # Require more samples per leaf
+            config['learning_rate'] = 0.03  # Slower learning
+        
+        # Handle class imbalance (if events < 40% or > 60% of samples)
+        event_rate = self.n_events / self.n_samples if self.n_samples > 0 else 0.5
+        if event_rate < 0.4:
+            # Few events: upweight positive class
+            config['scale_pos_weight'] = (1 - event_rate) / event_rate
+        elif event_rate > 0.6:
+            # Many events: upweight negative class
+            config['scale_pos_weight'] = event_rate / (1 - event_rate)
+        else:
+            config['scale_pos_weight'] = 1.0
+        
+        return xgb.XGBClassifier(**config)
     
     def train_with_nested_cv(self, X: np.ndarray, y: np.ndarray, 
                             model_type: str = 'ann',

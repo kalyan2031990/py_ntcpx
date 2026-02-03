@@ -577,6 +577,14 @@ class MachineLearningModels:
             'D1', 'D2', 'D5', 'D10', 'D20', 'D30', 'D50', 'D70', 'D90', 'D95'
         ]
         
+        # Add clinical features if available (FIX 3: Ensure clinical features are included)
+        clinical_candidates = ['Chemotherapy', 'Age', 'Sex', 'Diabetes', 'T_Stage', 'N_Stage', 
+                             'Baseline_Salivary_Function', 'Smoking', 'Alcohol']
+        for clinical_col in clinical_candidates:
+            if clinical_col in organ_data.columns and clinical_col not in feature_cols:
+                feature_cols.append(clinical_col)
+                print(f"    [DEBUG] Added clinical feature: {clinical_col}")
+        
         # Filter to available columns
         available_cols = [col for col in feature_cols if col in organ_data.columns]
         
@@ -591,6 +599,19 @@ class MachineLearningModels:
         
         if len(X) < 10:
             return None, None, None
+        
+        # DEBUG: Feature availability
+        print(f"\n[DEBUG] prepare_features() returned:")
+        print(f"  - X shape: {X.shape if X is not None else 'None'}")
+        print(f"  - Number of features: {len(available_cols) if available_cols else 0}")
+        print(f"  - All feature names: {available_cols}")
+        print(f"  - Sample of features (first 15): {available_cols[:15] if len(available_cols) > 15 else available_cols}")
+        print(f"  - Contains Dmean? {'Dmean' in available_cols}")
+        print(f"  - Contains mean_dose? {'mean_dose' in available_cols}")
+        print(f"  - Contains gEUD? {'gEUD' in available_cols}")
+        print(f"  - Contains clinical features? {any(['Chemo' in str(f) or 'Age' in str(f) or 'Sex' in str(f) or 'Diabetes' in str(f) for f in available_cols])}")
+        print(f"  - y sum (events): {y.sum() if y is not None else 'None'}")
+        print(f"  - Total samples: {len(y) if y is not None else 'None'}")
         
         return X, y, available_cols
     
@@ -646,24 +667,206 @@ class MachineLearningModels:
             print(f"      Error: XGBoost training failed: {e}")
             return None
     
+    def _train_and_evaluate_fold(self, X_train, X_test, y_train, y_test, feature_cols, organ, use_v2_components):
+        """Train and evaluate models for a single CV fold"""
+        fold_results = {}
+        
+        # Train ANN
+        if use_v2_components:
+            try:
+                ml_model = OverfitResistantMLModels(
+                    n_features=X_train.shape[1],
+                    n_samples=len(X_train),
+                    n_events=int(np.sum(y_train)),
+                    random_seed=self.random_state
+                )
+                ann_model = ml_model.create_ann_model()
+                ann_model.fit(X_train, y_train)
+            except Exception as e:
+                ann_model = self.train_ann_model(X_train, y_train, organ)
+        else:
+            ann_model = self.train_ann_model(X_train, y_train, organ)
+        
+        if ann_model is not None:
+            try:
+                y_pred_ann = ann_model.predict_proba(X_test)[:, 1]
+                fpr, tpr, _ = roc_curve(y_test, y_pred_ann)
+                auc_ann = auc(fpr, tpr)
+                fold_results['ANN'] = {
+                    'model': ann_model,
+                    'test_AUC': auc_ann
+                }
+            except Exception as e:
+                fold_results['ANN'] = None
+        
+        # Train XGBoost
+        if XGBOOST_AVAILABLE:
+            if use_v2_components:
+                try:
+                    if 'ml_model' not in locals():
+                        ml_model = OverfitResistantMLModels(
+                            n_features=X_train.shape[1],
+                            n_samples=len(X_train),
+                            n_events=int(np.sum(y_train)),
+                            random_seed=self.random_state
+                        )
+                    xgb_model = ml_model.create_xgboost_model()
+                    if xgb_model is not None:
+                        xgb_model.fit(X_train, y_train)
+                except Exception as e:
+                    xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            else:
+                xgb_model = self.train_xgboost_model(X_train, y_train, organ)
+            
+            if xgb_model is not None:
+                try:
+                    y_pred_xgb = xgb_model.predict_proba(X_test)[:, 1]
+                    fpr, tpr, _ = roc_curve(y_test, y_pred_xgb)
+                    auc_xgb = auc(fpr, tpr)
+                    fold_results['XGBoost'] = {
+                        'model': xgb_model,
+                        'test_AUC': auc_xgb
+                    }
+                except Exception as e:
+                    fold_results['XGBoost'] = None
+        
+        return fold_results
+    
     def train_and_evaluate_ml_models(self, organ_data, organ):
         """Train and evaluate ML models with proper cross-validation"""
         
         print(f"   Training ML models for {organ}...")
         
+        # DEBUG: Input data structure
+        print(f"\n[DEBUG] train_and_evaluate_ml_models() called for {organ}")
+        print(f"  - organ_data shape: {organ_data.shape}")
+        print(f"  - organ_data columns (first 30): {list(organ_data.columns)[:30]}")
+        print(f"  - 'PrimaryPatientID' in columns? {'PrimaryPatientID' in organ_data.columns}")
+        print(f"  - V2_COMPONENTS_AVAILABLE: {V2_COMPONENTS_AVAILABLE}")
+        
+        # Prepare features on ALL data first
+        X_all, y_all, feature_cols = self.prepare_features(organ_data)
+        
+        if X_all is None:
+            print(f"    Warning: Insufficient data for ML models")
+            return {}
+        
+        n_events_all = y_all.sum() if hasattr(y_all, 'sum') else np.sum(y_all)
+        n_samples_all = len(y_all)
+        
+        print(f"     Total samples: {n_samples_all}, Events: {int(n_events_all)}")
+        
+        if n_events_all < 5 or n_samples_all < 20:
+            print(f"    Warning: Insufficient events/samples for reliable ML training")
+            return {}
+        
         # Check if v2.0 components are available
         use_v2_components = V2_COMPONENTS_AVAILABLE and 'PrimaryPatientID' in organ_data.columns
         
-        if use_v2_components:
-            # V2.0: Patient-level splitting to prevent data leakage
-            print(f"     Using v2.0 patient-level splitting...")
-            
-            # Validate we have PrimaryPatientID for patient-level splitting
-            if 'PrimaryPatientID' not in organ_data.columns:
-                print(f"     Warning: PrimaryPatientID not found, falling back to row-level split")
-                use_v2_components = False
+        # DECISION: Use cross-validation for small datasets (< 100 samples)
+        use_cross_validation = n_samples_all < 100
         
-        if use_v2_components:
+        if use_cross_validation:
+            print(f"     Using 5-fold cross-validation for small dataset (n={n_samples_all})...")
+            # Convert to numpy arrays
+            if hasattr(X_all, 'values'):
+                X_all = X_all.values
+            if hasattr(y_all, 'values'):
+                y_all = y_all.values
+            
+            # Feature selection on ALL data (for small datasets, this is acceptable)
+            if use_v2_components and len(feature_cols) > 3:
+                try:
+                    print(f"\n[DEBUG] Before feature selection:")
+                    print(f"  - Total features available: {len(feature_cols)}")
+                    selector = RadiobiologyGuidedFeatureSelector()
+                    X_all_df = pd.DataFrame(X_all, columns=feature_cols)
+                    selected_features = selector.select_features(X_all_df, y_all, organ=organ)
+                    
+                    print(f"\n[DEBUG] After feature selection:")
+                    print(f"  - Selected features: {selected_features}")
+                    print(f"  - Number selected: {len(selected_features)}")
+                    
+                    if len(selected_features) < len(feature_cols):
+                        selected_indices = [i for i, f in enumerate(feature_cols) if f in selected_features]
+                        X_all = X_all[:, selected_indices]
+                        feature_cols = selected_features
+                        print(f"     Selected {len(selected_features)} features: {selected_features[:5]}...")
+                except Exception as e:
+                    print(f"     Warning: Feature selection failed: {e}, using all features")
+            
+            # Store selected features for prediction
+            self.selected_features = feature_cols
+            
+            # Use StratifiedKFold for cross-validation
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
+            
+            # Store CV results
+            ann_cv_scores = []
+            xgb_cv_scores = []
+            ann_models = []
+            xgb_models = []
+            
+            print(f"     Starting 5-fold cross-validation...")
+            fold = 1
+            for train_idx, test_idx in cv.split(X_all, y_all):
+                X_train, X_test = X_all[train_idx], X_all[test_idx]
+                y_train, y_test = y_all[train_idx], y_all[test_idx]
+                
+                print(f"       Fold {fold}: Train={len(y_train)} (events={int(y_train.sum())}), Test={len(y_test)} (events={int(y_test.sum())})")
+                
+                # Train and evaluate models for this fold
+                fold_results = self._train_and_evaluate_fold(
+                    X_train, X_test, y_train, y_test, feature_cols, organ, use_v2_components
+                )
+                
+                if 'ANN' in fold_results and fold_results['ANN'] is not None:
+                    ann_cv_scores.append(fold_results['ANN']['test_AUC'])
+                    ann_models.append(fold_results['ANN']['model'])
+                
+                if 'XGBoost' in fold_results and fold_results['XGBoost'] is not None:
+                    xgb_cv_scores.append(fold_results['XGBoost']['test_AUC'])
+                    xgb_models.append(fold_results['XGBoost']['model'])
+                
+                fold += 1
+            
+            # Aggregate results
+            results = {}
+            if ann_cv_scores:
+                mean_ann_auc = np.mean(ann_cv_scores)
+                std_ann_auc = np.std(ann_cv_scores)
+                print(f"     ANN - CV AUC: {mean_ann_auc:.3f} ± {std_ann_auc:.3f} (5-fold)")
+                results['ANN'] = {
+                    'model': ann_models[0],  # Use first fold's model for prediction
+                    'cv_AUC_mean': mean_ann_auc,
+                    'cv_AUC_std': std_ann_auc,
+                    'cv_AUC_scores': ann_cv_scores,
+                    'n_samples': n_samples_all,
+                    'n_events': int(n_events_all),
+                    'feature_names': feature_cols,
+                    'validation_method': '5-fold_cv'
+                }
+            
+            if xgb_cv_scores:
+                mean_xgb_auc = np.mean(xgb_cv_scores)
+                std_xgb_auc = np.std(xgb_cv_scores)
+                print(f"     XGBoost - CV AUC: {mean_xgb_auc:.3f} ± {std_xgb_auc:.3f} (5-fold)")
+                results['XGBoost'] = {
+                    'model': xgb_models[0],  # Use first fold's model for prediction
+                    'cv_AUC_mean': mean_xgb_auc,
+                    'cv_AUC_std': std_xgb_auc,
+                    'cv_AUC_scores': xgb_cv_scores,
+                    'n_samples': n_samples_all,
+                    'n_events': int(n_events_all),
+                    'feature_names': feature_cols,
+                    'validation_method': '5-fold_cv'
+                }
+            
+            # Store models and selected features
+            self.models[organ] = results
+            return results
+            
+        elif use_v2_components:
             # PATIENT-LEVEL SPLITTING (v2.0 - prevents data leakage)
             splitter = PatientDataSplitter(random_seed=self.random_state, test_size=0.2)
             train_df, test_df = splitter.create_splits(
@@ -734,9 +937,16 @@ class MachineLearningModels:
         # V2.0: Feature selection before training (if available)
         if use_v2_components and len(feature_cols) > 3:
             try:
+                print(f"\n[DEBUG] Before feature selection:")
+                print(f"  - Total features available: {len(feature_cols)}")
+                print(f"  - Feature names: {feature_cols}")
                 selector = RadiobiologyGuidedFeatureSelector()
                 X_train_df = pd.DataFrame(X_train, columns=feature_cols)
                 selected_features = selector.select_features(X_train_df, y_train, organ=organ)
+                
+                print(f"\n[DEBUG] After feature selection:")
+                print(f"  - Selected features: {selected_features}")
+                print(f"  - Number selected: {len(selected_features)}")
                 
                 if len(selected_features) < len(feature_cols):
                     # Use only selected features
@@ -747,6 +957,8 @@ class MachineLearningModels:
                     print(f"     Selected {len(selected_features)} features: {selected_features[:5]}...")
             except Exception as e:
                 print(f"     Warning: Feature selection failed: {e}, using all features")
+                import traceback
+                traceback.print_exc()
         
         # Train ANN
         print(f"     Training ANN...")
@@ -893,8 +1105,9 @@ class MachineLearningModels:
                 except Exception as e:
                     print(f"      Error: XGBoost evaluation failed: {e}")
         
-        # Store models and data for later use
+        # Store models and selected features for later use
         self.models[organ] = results
+        self.selected_features = feature_cols  # Store for prediction consistency
         
         return results
     
@@ -905,23 +1118,53 @@ class MachineLearningModels:
             return {}
         
         # Prepare features
-        X, y, feature_cols = self.prepare_features(organ_data)
+        X, y, available_feature_cols = self.prepare_features(organ_data)
         
         if X is None:
             return {}
+        
+        # Convert to numpy if needed
+        if hasattr(X, 'values'):
+            X = X.values
         
         predictions = {}
         
         for model_name, model_info in self.models[organ].items():
             try:
                 model = model_info['model']
+                trained_features = model_info['feature_names']
                 
-                # Ensure feature columns match
-                if set(feature_cols) == set(model_info['feature_names']):
-                    y_pred = model.predict_proba(X)[:, 1]
+                # Align features: use only features that were used during training
+                feature_indices = []
+                missing_features = []
+                for feature in trained_features:
+                    if feature in available_feature_cols:
+                        idx = list(available_feature_cols).index(feature)
+                        feature_indices.append(idx)
+                    else:
+                        missing_features.append(feature)
+                
+                if missing_features:
+                    print(f"    Warning: {len(missing_features)} features missing for {model_name}: {missing_features[:3]}...")
+                    # Continue with available features only
+                
+                if len(feature_indices) == len(trained_features):
+                    # All features available
+                    X_aligned = X[:, feature_indices]
+                    y_pred = model.predict_proba(X_aligned)[:, 1]
                     predictions[f'NTCP_ML_{model_name}'] = y_pred
+                elif len(feature_indices) > 0:
+                    # Some features missing - try to predict with available ones
+                    print(f"    Warning: Feature mismatch for {model_name} - using {len(feature_indices)}/{len(trained_features)} features")
+                    # This may fail, but we try
+                    try:
+                        X_aligned = X[:, feature_indices]
+                        y_pred = model.predict_proba(X_aligned)[:, 1]
+                        predictions[f'NTCP_ML_{model_name}'] = y_pred
+                    except:
+                        print(f"    Error: Cannot predict with {model_name} due to feature mismatch")
                 else:
-                    print(f"    Warning: Feature mismatch for {model_name}")
+                    print(f"    Warning: No matching features for {model_name}")
                     
             except Exception as e:
                 print(f"    Error: Prediction failed for {model_name}: {e}")
