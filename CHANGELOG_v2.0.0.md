@@ -1,8 +1,8 @@
 # Changelog - Version 2.0.0
 
-## 🎉 Major Release: Publication-Ready py_ntcpx v2.0.0
+## Major Release: py_ntcpx v2.0.0
 
-This release transforms py_ntcpx from an experimental research tool into a publication-ready, methodologically rigorous software package.
+This release introduces a methodologically rigorous NTCP analysis framework with enhanced machine learning capabilities, statistical validation, and explainable AI features.
 
 ---
 
@@ -39,8 +39,8 @@ This release transforms py_ntcpx from an experimental research tool into a publi
 - ✅ EXPLORATORY labels for ML models
 - ✅ Intended use, limitations, and failure modes documented
 
-### Publication-Ready Outputs
-- ✅ 600 DPI publication-ready figures
+### Outputs
+- ✅ 600 DPI figures
 - ✅ LaTeX tables for manuscript
 - ✅ Statistical reporting with confidence intervals
 - ✅ Comprehensive documentation
@@ -77,7 +77,7 @@ This release transforms py_ntcpx from an experimental research tool into a publi
 - `src/features/` - Feature selection, auto reduction
 - `src/metrics/` - AUC with CI, DeLong test
 - `src/reporting/` - Statistical reporter, leakage detector
-- `src/visualization/` - Publication plots (600 DPI)
+- `src/visualization/` - High-resolution plots (600 DPI)
 - `src/safety/` - Clinical safety guard
 - `src/utils/` - Logging utilities
 
@@ -91,7 +91,7 @@ This release transforms py_ntcpx from an experimental research tool into a publi
 - `tests/regression/` - Regression tests
 
 ### Scripts
-- `scripts/publication_checklist.py` - Publication readiness verification
+- `scripts/publication_checklist.py` - Quality verification
 
 ---
 
@@ -157,10 +157,9 @@ This release transforms py_ntcpx from an experimental research tool into a publi
 
 ## 🙏 Acknowledgments
 
-This release represents a complete methodological overhaul to ensure publication-ready quality and clinical safety.
+This release represents a complete methodological overhaul to ensure rigorous quality and clinical safety.
 
 ---
 
-**Release Date**: 2024
+**Release Date**: February 3, 2026
 **Version**: 2.0.0
-**Status**: Production Ready ✅

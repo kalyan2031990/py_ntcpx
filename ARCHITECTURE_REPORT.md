@@ -1,8 +1,7 @@
 # py_ntcpx v2.0.0 - Complete Architecture Report
 
 **Version**: 2.0.0  
-**Date**: 2024  
-**Status**: Production Ready ✅
+**Date**: February 2026
 
 ---
 
@@ -24,10 +23,10 @@
 
 ## Executive Summary
 
-**py_ntcpx v2.0.0** is a comprehensive, publication-ready pipeline for Normal Tissue Complication Probability (NTCP) analysis in head & neck cancer radiotherapy. The system integrates classical radiobiological models, modern machine learning approaches, explainable AI (SHAP), clinical factor analysis, and rigorous statistical validation.
+**py_ntcpx v2.0.0** is a comprehensive pipeline for Normal Tissue Complication Probability (NTCP) analysis in head & neck cancer radiotherapy. The system integrates classical radiobiological models, modern machine learning approaches, explainable AI (SHAP), clinical factor analysis, and rigorous statistical validation.
 
 ### Key Features
-- **9-step pipeline** from DVH preprocessing to publication-ready outputs
+- **9-step pipeline** from DVH preprocessing to high-quality outputs
 - **4-tier NTCP model framework** (Legacy, MLE-refitted, Modern Classical, AI)
 - **Patient-level data splitting** preventing data leakage
 - **EPV-aware ML training** with overfitting prevention
@@ -376,7 +375,7 @@ True-model SHAP analysis that explains the exact ML models trained in Step 3.
    a. **Beeswarm Plot**
       - Shows feature importance distribution
       - Color-coded by feature value
-      - Publication-ready (600 DPI)
+      - High-resolution (600 DPI)
 
    b. **Global Feature Importance Bar Plot**
       - Mean |SHAP| values
@@ -508,7 +507,7 @@ SHAP values provide:
 
 4. **correlation_matrix.png / .csv**
    - Full correlation matrix
-   - Publication-ready visualization
+   - High-resolution visualization
 
 5. **clinical_factors_analysis_report.txt**
    - Comprehensive text summary
@@ -761,7 +760,7 @@ class CohortConsistencyScore:
 
 #### Step 6: Publication Diagrams ✅
 - **File**: `code6_publication_diagrams.py`
-- **Function**: Publication-ready figures (600 DPI)
+- **Function**: High-resolution figures (600 DPI)
 - **Output**: High-resolution plots (PNG, SVG)
 - **Status**: Working
 
@@ -773,7 +772,7 @@ class CohortConsistencyScore:
 
 #### Step 8: Publication Tables Summary ✅
 - **File**: `supp_results_summary.py`
-- **Function**: Publication-ready tables
+- **Function**: High-quality tables
 - **Output**: LaTeX tables, Excel summaries
 - **Status**: Working
 
@@ -1036,7 +1035,7 @@ class CohortConsistencyScore:
 
 ## Conclusion
 
-**py_ntcpx v2.0.0** represents a comprehensive, publication-ready pipeline for NTCP analysis with:
+**py_ntcpx v2.0.0** represents a comprehensive pipeline for NTCP analysis with:
 
 - ✅ **Rigorous methodology**: Patient-level splitting, EPV enforcement, overfitting prevention
 - ✅ **Comprehensive models**: 4-tier NTCP framework, ML models, uncertainty quantification
@@ -1051,5 +1050,5 @@ The pipeline is ready for clinical research and publication use.
 
 **Report Generated**: 2024  
 **Version**: 2.0.0  
-**Status**: Production Ready ✅
+**Version**: 2.0.0
 
