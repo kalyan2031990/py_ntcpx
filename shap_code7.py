@@ -208,6 +208,9 @@ def run_shap_analysis(code3_dir, output_dir):
         
         print(f"  Loaded {len(X)} samples with {len(feature_names)} features")
         
+        # Store bootstrap results for comparison between models
+        previous_bootstrap_results = None
+        
         # Process each model
         for model_name, model in models.items():
             print(f"\n  Processing {model_name}...")
@@ -264,6 +267,36 @@ def run_shap_analysis(code3_dir, output_dir):
                     shap_values = shap_values.reshape(shap_values.shape[0], -1)
                 
                 print(f"    Computed SHAP values: shape {shap_values.shape}")
+                
+                # NEW: Calculate bootstrap SHAP for stability (if dataset is small)
+                if len(X_plot) < 100:
+                    print(f"    Computing bootstrap SHAP for stability assessment (n={len(X_plot)})...")
+                    try:
+                        bootstrap_results = calculate_bootstrap_shap(
+                            model, X_plot, model_type=model_name.lower(), n_bootstrap=min(100, len(X_plot) * 2)
+                        )
+                        
+                        # Save bootstrap stability report
+                        stability_df = pd.DataFrame(bootstrap_results['feature_stability'])
+                        stability_df.to_excel(organ_outdir / "shap_stability_report.xlsx", index=False)
+                        print(f"    Saved bootstrap stability report")
+                        
+                        # Flag inconsistent features if comparing with another model
+                        if 'previous_bootstrap_results' in locals():
+                            inconsistent = flag_inconsistent_importance(
+                                previous_bootstrap_results, bootstrap_results, threshold=0.7
+                            )
+                            if inconsistent:
+                                inconsistent_df = pd.DataFrame(inconsistent)
+                                inconsistent_df.to_excel(organ_outdir / "inconsistent_features.xlsx", index=False)
+                                print(f"    Found {len(inconsistent)} inconsistent features between models")
+                        
+                        # Store for comparison
+                        previous_bootstrap_results = bootstrap_results
+                    except Exception as e:
+                        print(f"    Warning: Bootstrap SHAP failed: {e}")
+                        import traceback
+                        traceback.print_exc()
                 
                 # === SHAP API FIX: wrap into Explanation object ===
                 explanation = shap.Explanation(
@@ -329,6 +362,199 @@ def main():
     args = parser.parse_args()
     
     run_shap_analysis(args.code3_dir, args.outdir)
+
+
+def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100):
+    """
+    Calculate SHAP values with bootstrapping for stability assessment
+    
+    Parameters
+    ----------
+    model : trained model
+        ML model (ANN or XGBoost)
+    X : pd.DataFrame
+        Feature matrix
+    model_type : str
+        Type of model ('ann' or 'xgboost')
+    n_bootstrap : int
+        Number of bootstrap samples
+        
+    Returns
+    -------
+    dict
+        Dictionary with mean SHAP, std SHAP, and feature stability
+    """
+    shap_values_list = []
+    feature_importance_rankings = []
+    
+    print(f"      Running {n_bootstrap} bootstrap iterations...")
+    
+    for i in range(n_bootstrap):
+        if (i + 1) % 20 == 0:
+            print(f"        Bootstrap {i+1}/{n_bootstrap}...")
+        
+        # Bootstrap sample
+        indices = np.random.choice(len(X), size=len(X), replace=True)
+        X_boot = X.iloc[indices]
+        
+        try:
+            # Calculate SHAP values
+            if model_type.lower() == 'xgboost':
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_boot)
+                # Handle multi-class output
+                if isinstance(shap_values, list):
+                    shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            else:
+                # For ANN or other models
+                # Use smaller background for speed
+                background = X_boot[:min(20, len(X_boot))]
+                
+                def predict_proba_wrapper(X_input):
+                    return model.predict_proba(X_input)[:, 1]
+                
+                explainer = shap.KernelExplainer(predict_proba_wrapper, background)
+                shap_values = explainer.shap_values(X_boot[:min(50, len(X_boot))])  # Limit samples for speed
+                
+                # Handle list output
+                if isinstance(shap_values, list):
+                    shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+            
+            shap_values = np.array(shap_values)
+            
+            # Ensure 2D
+            if len(shap_values.shape) > 2:
+                shap_values = shap_values.reshape(shap_values.shape[0], -1)
+            
+            shap_values_list.append(shap_values)
+            
+            # Calculate feature importance ranking for this bootstrap
+            mean_abs_shap = np.abs(shap_values).mean(axis=0)
+            ranking = np.argsort(-mean_abs_shap)  # Descending order
+            feature_importance_rankings.append(ranking)
+            
+        except Exception as e:
+            # Skip this bootstrap if it fails
+            continue
+    
+    if len(shap_values_list) == 0:
+        raise ValueError("All bootstrap iterations failed")
+    
+    # Calculate consensus
+    shap_array = np.array(shap_values_list)
+    mean_shap = np.mean(shap_array, axis=0)
+    std_shap = np.std(shap_array, axis=0)
+    
+    # Calculate feature stability
+    feature_stability = calculate_feature_stability(feature_importance_rankings, X.columns)
+    
+    return {
+        'mean_shap': mean_shap,
+        'std_shap': std_shap,
+        'feature_stability': feature_stability,
+        'bootstrap_samples': len(shap_values_list)
+    }
+
+
+def calculate_feature_stability(rankings, feature_names):
+    """
+    Calculate how stable feature rankings are across bootstrap samples
+    
+    Parameters
+    ----------
+    rankings : list of np.ndarray
+        List of feature ranking arrays (one per bootstrap)
+    feature_names : list of str
+        Feature names
+        
+    Returns
+    -------
+    list of dict
+        Stability report for each feature
+    """
+    n_features = len(feature_names)
+    n_bootstrap = len(rankings)
+    
+    if n_bootstrap == 0:
+        return []
+    
+    # Calculate mean rank for each feature
+    mean_ranks = np.zeros(n_features)
+    for ranking in rankings:
+        for rank, feature_idx in enumerate(ranking):
+            if feature_idx < n_features:
+                mean_ranks[feature_idx] += rank
+    
+    mean_ranks = mean_ranks / n_bootstrap
+    
+    # Calculate rank stability (lower std = more stable)
+    rank_stds = np.zeros(n_features)
+    for feature_idx in range(n_features):
+        ranks = []
+        for ranking in rankings:
+            if feature_idx < len(ranking):
+                rank = np.where(ranking == feature_idx)[0]
+                if len(rank) > 0:
+                    ranks.append(rank[0])
+        if len(ranks) > 0:
+            rank_stds[feature_idx] = np.std(ranks)
+        else:
+            rank_stds[feature_idx] = n_features  # High penalty if never ranked
+    
+    # Create stability report
+    stability_report = []
+    for i, feature in enumerate(feature_names):
+        stability_report.append({
+            'feature': feature,
+            'mean_rank': mean_ranks[i],
+            'rank_std': rank_stds[i],
+            'stability_category': 'High' if rank_stds[i] < 2 else 'Medium' if rank_stds[i] < 5 else 'Low'
+        })
+    
+    return sorted(stability_report, key=lambda x: x['mean_rank'])
+
+
+def flag_inconsistent_importance(shap_results_ann, shap_results_xgb, threshold=0.7):
+    """
+    Flag features with inconsistent importance between models
+    
+    Parameters
+    ----------
+    shap_results_ann : dict
+        SHAP results from ANN model
+    shap_results_xgb : dict
+        SHAP results from XGBoost model
+    threshold : float
+        Threshold for flagging inconsistency (default: 0.7)
+        
+    Returns
+    -------
+    list of dict
+        List of inconsistent features with details
+    """
+    ann_importance = {item['feature']: item['mean_rank'] for item in shap_results_ann['feature_stability']}
+    xgb_importance = {item['feature']: item['mean_rank'] for item in shap_results_xgb['feature_stability']}
+    
+    inconsistent_features = []
+    
+    all_features = set(ann_importance.keys()) | set(xgb_importance.keys())
+    
+    for feature in all_features:
+        ann_rank = ann_importance.get(feature, 100)  # High rank if not in top features
+        xgb_rank = xgb_importance.get(feature, 100)
+        
+        rank_diff = abs(ann_rank - xgb_rank)
+        
+        if rank_diff > len(all_features) * threshold:
+            inconsistent_features.append({
+                'feature': feature,
+                'ann_rank': ann_rank,
+                'xgb_rank': xgb_rank,
+                'rank_difference': rank_diff,
+                'severity': 'High' if rank_diff > 10 else 'Medium'
+            })
+    
+    return inconsistent_features
 
 
 if __name__ == "__main__":

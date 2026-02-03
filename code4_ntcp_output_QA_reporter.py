@@ -438,9 +438,38 @@ def main():
         doc.add_heading("5) ML Overfitting/Leakage Heuristics (Applied)", level=1)
         doc.add_paragraph("Flagged when AUC ≥ 0.90 with n < 40 or events < 8. High discrimination in small/low‑event cohorts suggests optimism or leakage.")
         
+        # NEW: Small Dataset Advisory
+        if not summary_df.empty:
+            doc.add_heading("6) Small Dataset Advisory", level=1)
+            for _, row in summary_df.iterrows():
+                n = row.get('n', 0)
+                events = row.get('events', 0)
+                if isinstance(n, (int, float)) and not np.isnan(n) and n < 100:
+                    epv = events / max(1, len([c for c in summary_df.columns if c.startswith('AUC|')])) if isinstance(events, (int, float)) and not np.isnan(events) else 0
+                    advisory_text = generate_small_dataset_advisory(int(n), int(events) if isinstance(events, (int, float)) and not np.isnan(events) else 0, epv)
+                    if advisory_text:
+                        # Parse and add advisory sections
+                        for line in advisory_text.split('\n'):
+                            if line.strip():
+                                if line.startswith('##'):
+                                    doc.add_heading(line.replace('##', '').strip(), level=2)
+                                elif line.startswith('###'):
+                                    doc.add_heading(line.replace('###', '').strip(), level=3)
+                                elif line.startswith('-'):
+                                    doc.add_paragraph(line.strip('- ').strip(), style='List Bullet')
+                                else:
+                                    doc.add_paragraph(line.strip())
+        
+        # NEW: Clinical Factor Significance
+        doc.add_heading("7) Clinical Factor Significance", level=1)
+        # Try to extract clinical factors from adaptation reports if available
+        # This would need to be passed from code3 or stored in results
+        doc.add_paragraph("Clinical factors with p < 0.05 are automatically integrated into ML models.")
+        doc.add_paragraph("Check model feature lists for included clinical factors (e.g., Age, Chemotherapy, etc.).")
+        
         # V2.0: Data Leakage Detection
         if V2_LEAKAGE_DETECTOR_AVAILABLE and combined is not None:
-            doc.add_heading("6) Data Leakage Detection (v2.0)", level=1)
+            doc.add_heading("8) Data Leakage Detection (v2.0)", level=1)
             leakage_detector = DataLeakageDetector()
             
             # Check for train/test split information in results
@@ -481,13 +510,171 @@ def main():
                 doc.add_paragraph("Data leakage detection requires PrimaryPatientID column or train/test split information.")
                 doc.add_paragraph("Current data does not contain sufficient information for leakage detection.")
         else:
-            doc.add_heading("6) Data Leakage Detection", level=1)
+            doc.add_heading("8) Data Leakage Detection", level=1)
             doc.add_paragraph("v2.0 leakage detection components not available. Install v2.0 components for enhanced leakage detection.")
 
         doc.save(docx_path)
 
     print(f"[OK] Saved report: {docx_path}")
     print(f"[OK] Saved tables: {excel_path}")
+
+
+def generate_small_dataset_advisory(n_samples, n_events, epv):
+    """
+    Generate advisory text for small datasets
+    
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples
+    n_events : int
+        Number of events
+    epv : float
+        Events per variable
+        
+    Returns
+    -------
+    str
+        Advisory text
+    """
+    advisory = []
+    
+    if n_samples < 100:
+        advisory.append("## ⚠️ SMALL DATASET ADVISORY")
+        advisory.append(f"- **Dataset size**: {n_samples} patients")
+        advisory.append(f"- **Number of events**: {n_events}")
+        advisory.append(f"- **Events per variable (EPV)**: {epv:.2f}")
+        
+        if n_samples < 30:
+            advisory.append("### 🔴 HIGH UNCERTAINTY")
+            advisory.append("- Sample size < 30: Results are exploratory")
+            advisory.append("- Use LOOCV: No independent test set")
+            advisory.append("- Models may be unstable")
+            advisory.append("- **Recommendation**: Collect more data before clinical application")
+        
+        elif n_samples < 50:
+            advisory.append("### 🟡 MODERATE UNCERTAINTY")
+            advisory.append("- Sample size 30-50: Limited generalizability")
+            advisory.append("- Simplified models used (reduced complexity)")
+            advisory.append("- Wider confidence intervals expected")
+            advisory.append("- **Recommendation**: Use for hypothesis generation only")
+        
+        elif n_samples < 100:
+            advisory.append("### 🟢 CAUTION ADVISED")
+            advisory.append("- Sample size 50-100: Results indicative but not definitive")
+            advisory.append("- Model complexity adapted to sample size")
+            advisory.append("- Clinical factors integrated when significant")
+            advisory.append("- **Recommendation**: Validate with external dataset")
+        
+        advisory.append("\n### 📊 Statistical Considerations:")
+        advisory.append(f"- Minimum EPV for reliable modeling: 10 (Current: {epv:.2f})")
+        advisory.append(f"- Recommended sample size for parotid NTCP: ≥150 patients")
+        advisory.append(f"- Bootstrap confidence intervals may be wide")
+    
+    return "\n".join(advisory)
+
+
+def report_clinical_factor_significance(significant_factors, p_values=None):
+    """
+    Create prominent clinical factor significance report
+    
+    Parameters
+    ----------
+    significant_factors : list of str
+        List of significant clinical factor names
+    p_values : dict, optional
+        Dictionary mapping factor names to p-values
+        
+    Returns
+    -------
+    str
+        Clinical factor report text
+    """
+    if not significant_factors:
+        return "## 📋 Clinical Factors Analysis\nNo significant clinical factors found (p < 0.05)"
+    
+    report = ["## 📋 CLINICALLY SIGNIFICANT FACTORS"]
+    report.append("The following clinical factors showed significant association with toxicity (p < 0.05):")
+    report.append("")
+    
+    for i, factor in enumerate(significant_factors, 1):
+        p_val = p_values.get(factor, "N/A") if p_values else "N/A"
+        p_str = f" (p = {p_val})" if p_val != "N/A" else ""
+        
+        # Add clinical interpretation
+        interpretation = ""
+        if 'age' in factor.lower() or 'Age' in factor:
+            interpretation = " → Older age associated with higher toxicity risk"
+        elif 'chemo' in factor.lower() or 'Chemo' in factor:
+            interpretation = " → Chemotherapy increases toxicity risk"
+        elif 'tobacco' in factor.lower() or 'smoking' in factor.lower() or 'Smoking' in factor:
+            interpretation = " → Tobacco exposure may increase risk"
+        elif 'diabetes' in factor.lower() or 'Diabetes' in factor:
+            interpretation = " → Diabetes may modify toxicity risk"
+        
+        report.append(f"{i}. **{factor}**{p_str}{interpretation}")
+    
+    report.append("")
+    report.append("### 🩺 Clinical Implications:")
+    report.append("- These factors have been automatically integrated into NTCP models")
+    report.append("- Consider these in treatment planning and patient counseling")
+    report.append("- Further validation needed for clinical implementation")
+    
+    return "\n".join(report)
+
+
+def generate_enhanced_qa_report(results, adaptation_report=None):
+    """
+    Generate enhanced QA report with small dataset advisories
+    
+    Parameters
+    ----------
+    results : dict
+        Results dictionary with organ-level data
+    adaptation_report : dict, optional
+        Adaptation report from ML training
+        
+    Returns
+    -------
+    str
+        Enhanced QA report text
+    """
+    report_sections = []
+    
+    # 1. Small Dataset Advisory
+    if adaptation_report and adaptation_report.get('dataset_size', 0) < 100:
+        advisory = generate_small_dataset_advisory(
+            adaptation_report['dataset_size'],
+            adaptation_report.get('n_events', 0),
+            adaptation_report.get('epv', 0)
+        )
+        report_sections.append(advisory)
+    
+    # 2. Clinical Factor Significance
+    if adaptation_report and adaptation_report.get('significant_clinical_factors'):
+        clinical_report = report_clinical_factor_significance(
+            adaptation_report['significant_clinical_factors']
+        )
+        report_sections.append(clinical_report)
+    
+    # 3. Feature Selection Summary
+    if adaptation_report and adaptation_report.get('selected_features'):
+        report_sections.append(f"## 🔍 Selected Features\n{', '.join(adaptation_report['selected_features'])}")
+    
+    # 4. CV Strategy Used
+    if adaptation_report and adaptation_report.get('cv_strategy'):
+        report_sections.append(f"## 📈 Cross-Validation Strategy\n{adaptation_report['cv_strategy']} ({adaptation_report.get('cv_folds', 'N/A')} folds)")
+    
+    # 5. Model Adaptation Summary
+    if adaptation_report and adaptation_report.get('model_config'):
+        report_sections.append("## ⚙️ Model Adaptations")
+        report_sections.append(f"- ANN: {adaptation_report['model_config'].get('ann', {})}")
+        report_sections.append(f"- XGBoost: {adaptation_report['model_config'].get('xgboost', {})}")
+    
+    # Combine all sections
+    full_report = "\n\n".join(report_sections)
+    
+    return full_report
 
 
 def generate_table_X(ntcp_df, clinical_df, output_dir):

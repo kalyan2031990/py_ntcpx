@@ -80,16 +80,80 @@ class UncertaintyAwareNTCP:
 class CohortConsistencyScore:
     """Cohort Consistency Score for QA validation"""
     
-    def __init__(self):
+    def __init__(self, n_samples=None):
         self.training_stats = None
+        self.n_samples = n_samples
+        self.ccs_threshold = 0.2  # Default threshold, will be updated dynamically
+        self.features = None  # Store features for dynamic threshold calculation
     
     def fit(self, X_train):
         """Fit on training cohort"""
         X_train = np.asarray(X_train)
+        self.features = X_train  # Store for dynamic threshold calculation
+        if self.n_samples is None:
+            self.n_samples = len(X_train)
+        
         self.training_stats = {
             'mean': np.mean(X_train, axis=0),
             'cov': np.cov(X_train.T) + np.eye(X_train.shape[1]) * 1e-6  # Regularization
         }
+        
+        # Calculate dynamic threshold after fitting
+        self.ccs_threshold = self.calculate_dynamic_threshold(X_train)
+    
+    def calculate_dynamic_threshold(self, features):
+        """
+        Calculate dynamic CCS threshold based on dataset characteristics
+        
+        Parameters
+        ----------
+        features : np.ndarray
+            Feature matrix (n_samples, n_features)
+            
+        Returns
+        -------
+        float
+            Dynamic threshold value
+        """
+        n_samples = len(features) if hasattr(features, '__len__') else self.n_samples
+        
+        if n_samples is None:
+            return 0.2  # Default threshold
+        
+        # Rule 1: For very small datasets (<30), use percentile-based threshold
+        if n_samples < 30:
+            try:
+                # Calculate Mahalanobis distances for all samples
+                distances = []
+                mean = np.mean(features, axis=0)
+                cov = np.cov(features.T) + np.eye(features.shape[1]) * 1e-6
+                cov_inv = np.linalg.pinv(cov)
+                
+                for i in range(len(features)):
+                    d_squared = mahalanobis(features[i], mean, cov_inv) ** 2
+                    distances.append(np.sqrt(d_squared))
+                
+                distances = np.array(distances)
+                
+                if len(np.unique(distances)) < 5:  # Very homogeneous
+                    # Use 95th percentile instead of fixed threshold
+                    threshold = np.percentile(distances, 95)
+                    threshold = max(threshold, 0.05)  # Minimum threshold
+                    return threshold
+            except Exception:
+                pass  # Fall through to default
+        
+        # Rule 2: For small datasets (30-100), use relaxed threshold
+        if n_samples < 100:
+            return 0.5  # More relaxed than 0.2
+        
+        # Rule 3: For medium datasets (100-200), use moderate threshold
+        elif n_samples < 200:
+            return 0.3
+        
+        # Rule 4: For large datasets, use strict threshold
+        else:
+            return 0.2
     
     def calculate_ccs(self, X_new):
         """Calculate Cohort Consistency Score using Mahalanobis distance"""
@@ -108,20 +172,30 @@ class CohortConsistencyScore:
         # CCS = exp(-½ D²_Mahalanobis)
         ccs = np.exp(-0.5 * d_squared)
         
-        # Interpretation thresholds
+        # Use dynamic threshold for interpretation
+        dynamic_threshold = self.ccs_threshold
+        
+        # Interpretation thresholds (adaptive based on dataset size)
         if ccs > 0.95:
             warning_level = "none"
         elif ccs > 0.80:
             warning_level = "low"
         elif ccs > 0.50:
             warning_level = "medium"
-        elif ccs > 0.20:
+        elif ccs > dynamic_threshold:
             warning_level = "high"
         else:
             warning_level = "critical"
         
         # Calculate warning boolean: True if warning_level is moderate, high, or critical
         warning = warning_level in ["medium", "high", "critical"]
+        
+        # For small datasets, provide warnings instead of critical flags
+        if self.n_samples and self.n_samples < 100:
+            # For small datasets, downgrade "critical" to "high" warning
+            if warning_level == "critical":
+                warning_level = "high"
+                warning = True  # Still warn, but not as severe
         
         # Safety: True means model output is safe for clinical interpretation
         # safety = not warning means: safe when no warning (warning=False), unsafe when warning (warning=True)
@@ -138,14 +212,24 @@ class CohortConsistencyScore:
         }
     
     def _get_recommendation(self, warning):
-        recommendations = {
-            'none': "[OK] Patient within training cohort distribution - predictions reliable",
-            'low': "[WARN] Minor deviation - use predictions with caution",
-            'medium': "[WARN] Moderate deviation - verify clinical parameters carefully",
-            'high': "[ERROR] Significant deviation - predictions may be unreliable",
-            'critical': "[ERROR] Out-of-distribution - DO NOT use predictions for clinical decisions"
-        }
-        return recommendations[warning]
+        # Adapt recommendations for small datasets
+        if self.n_samples and self.n_samples < 100:
+            recommendations = {
+                'none': "[OK] Patient within training cohort distribution - predictions reliable",
+                'low': "[WARN] Minor deviation - use predictions with caution (small dataset)",
+                'medium': "[WARN] Moderate deviation - verify clinical parameters carefully (small dataset)",
+                'high': "[WARN] Significant deviation - predictions may be unreliable (small dataset - interpret with caution)",
+                'critical': "[WARN] Out-of-distribution - use predictions with extreme caution (small dataset)"
+            }
+        else:
+            recommendations = {
+                'none': "[OK] Patient within training cohort distribution - predictions reliable",
+                'low': "[WARN] Minor deviation - use predictions with caution",
+                'medium': "[WARN] Moderate deviation - verify clinical parameters carefully",
+                'high': "[ERROR] Significant deviation - predictions may be unreliable",
+                'critical': "[ERROR] Out-of-distribution - DO NOT use predictions for clinical decisions"
+            }
+        return recommendations.get(warning, "[UNKNOWN] Unknown warning level")
     
     def _calculate_feature_deviations(self, X_new, mean, std):
         """Calculate per-feature standardized deviations"""

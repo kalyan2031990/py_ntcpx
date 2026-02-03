@@ -28,7 +28,7 @@ import re
 from scipy.optimize import minimize, differential_evolution
 from scipy.stats import norm
 from sklearn.metrics import roc_curve, auc, brier_score_loss, log_loss
-from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split
+from sklearn.model_selection import cross_val_score, StratifiedKFold, train_test_split, LeaveOneOut
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -559,6 +559,82 @@ class NTCPCalculator:
         
         return results
 
+def adapt_for_small_dataset(X, y, clinical_data=None):
+    """
+    Adjust ML pipeline parameters based on dataset size
+    
+    Parameters
+    ----------
+    X : np.ndarray or pd.DataFrame
+        Feature matrix
+    y : np.ndarray or pd.Series
+        Binary outcomes
+    clinical_data : pd.DataFrame, optional
+        Clinical data for integration
+        
+    Returns
+    -------
+    dict
+        Dictionary with adaptation parameters
+    """
+    n_samples = len(X) if hasattr(X, '__len__') else X.shape[0]
+    n_events = int(np.sum(y)) if hasattr(y, '__len__') else int(y.sum())
+    
+    adaptations = {
+        'n_samples': n_samples,
+        'n_events': n_events,
+        'cv_strategy': None,
+        'cv_folds': None,
+        'model_config': {},
+        'feature_selector_config': {}
+    }
+    
+    # CV Strategy Adaptation
+    if n_samples < 30:
+        adaptations['cv_strategy'] = 'LeaveOneOut'
+        adaptations['cv_folds'] = n_samples
+    elif n_samples < 100:
+        adaptations['cv_strategy'] = 'StratifiedKFold'
+        adaptations['cv_folds'] = min(5, max(3, n_samples // 3))
+    else:
+        adaptations['cv_strategy'] = 'StratifiedKFold'
+        adaptations['cv_folds'] = 5
+    
+    # Model Complexity Adaptation
+    if n_samples < 50:
+        adaptations['model_config'] = {
+            'ann': {'hidden_layer_sizes': (8,), 'max_iter': 200, 'alpha': 0.1},
+            'xgboost': {'n_estimators': 20, 'max_depth': 2, 'learning_rate': 0.1}
+        }
+    elif n_samples < 100:
+        adaptations['model_config'] = {
+            'ann': {'hidden_layer_sizes': (16,), 'max_iter': 300, 'alpha': 0.05},
+            'xgboost': {'n_estimators': 30, 'max_depth': 2, 'learning_rate': 0.05}
+        }
+    else:
+        adaptations['model_config'] = {
+            'ann': {'hidden_layer_sizes': (16, 8), 'max_iter': 500, 'alpha': 0.01},
+            'xgboost': {'n_estimators': 50, 'max_depth': 3, 'learning_rate': 0.05}
+        }
+    
+    # Feature Selection Adaptation
+    if n_events < 10:
+        adaptations['feature_selector_config'] = {
+            'max_features': max(2, n_events // 5),  # More conservative EPV
+            'force_essential_only': True
+        }
+    else:
+        adaptations['feature_selector_config'] = {
+            'max_features': max(3, n_events // 10),
+            'force_essential_only': False
+        }
+    
+    # Calculate EPV
+    adaptations['epv'] = n_events / adaptations['feature_selector_config']['max_features'] if adaptations['feature_selector_config']['max_features'] > 0 else 0
+    
+    return adaptations
+
+
 class MachineLearningModels:
     """Machine learning models for NTCP prediction with proper validation"""
     
@@ -566,6 +642,7 @@ class MachineLearningModels:
         self.random_state = random_state
         self.models = {}
         self.scalers = {}
+        self.adaptation_reports = {}  # Store adaptation info per organ
         
     def prepare_features(self, organ_data):
         """Prepare feature matrix for ML models"""
@@ -760,6 +837,19 @@ class MachineLearningModels:
             print(f"    Warning: Insufficient events/samples for reliable ML training")
             return {}
         
+        # NEW: Check dataset size and adapt
+        X_all_array = X_all.values if hasattr(X_all, 'values') else X_all
+        adaptations = adapt_for_small_dataset(X_all_array, y_all, organ_data)
+        
+        print(f"     Dataset adaptations:")
+        print(f"       - CV Strategy: {adaptations['cv_strategy']} ({adaptations['cv_folds']} folds)")
+        print(f"       - EPV: {adaptations['epv']:.2f}")
+        print(f"       - ANN Config: {adaptations['model_config'].get('ann', {})}")
+        print(f"       - XGBoost Config: {adaptations['model_config'].get('xgboost', {})}")
+        
+        # Store adaptation report
+        self.adaptation_reports[organ] = adaptations
+        
         # Check if v2.0 components are available
         use_v2_components = V2_COMPONENTS_AVAILABLE and 'PrimaryPatientID' in organ_data.columns
         
@@ -779,9 +869,22 @@ class MachineLearningModels:
                 try:
                     print(f"\n[DEBUG] Before feature selection:")
                     print(f"  - Total features available: {len(feature_cols)}")
-                    selector = RadiobiologyGuidedFeatureSelector()
+                    # NEW: Pass clinical data to feature selector
+                    selector = RadiobiologyGuidedFeatureSelector(
+                        organ=organ,
+                        clinical_data=organ_data if 'PrimaryPatientID' in organ_data.columns else None,
+                        outcome_column='Observed_Toxicity'
+                    )
                     X_all_df = pd.DataFrame(X_all, columns=feature_cols)
-                    selected_features = selector.select_features(X_all_df, y_all, organ=organ)
+                    selected_features = selector.select_features(
+                        X_all_df, y_all, organ=organ,
+                        max_features=adaptations['feature_selector_config'].get('max_features')
+                    )
+                    
+                    # Store significant clinical factors
+                    if hasattr(selector, 'significant_clinical_factors') and selector.significant_clinical_factors:
+                        adaptations['significant_clinical_factors'] = selector.significant_clinical_factors
+                        print(f"  - Significant clinical factors: {selector.significant_clinical_factors}")
                     
                     print(f"\n[DEBUG] After feature selection:")
                     print(f"  - Selected features: {selected_features}")
@@ -798,8 +901,11 @@ class MachineLearningModels:
             # Store selected features for prediction
             self.selected_features = feature_cols
             
-            # Use StratifiedKFold for cross-validation
-            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
+            # Use adapted CV strategy
+            if adaptations['cv_strategy'] == 'LeaveOneOut':
+                cv = LeaveOneOut()
+            else:
+                cv = StratifiedKFold(n_splits=adaptations['cv_folds'], shuffle=True, random_state=self.random_state)
             
             # Store CV results
             ann_cv_scores = []
@@ -940,9 +1046,22 @@ class MachineLearningModels:
                 print(f"\n[DEBUG] Before feature selection:")
                 print(f"  - Total features available: {len(feature_cols)}")
                 print(f"  - Feature names: {feature_cols}")
-                selector = RadiobiologyGuidedFeatureSelector()
+                # NEW: Pass clinical data to feature selector
+                selector = RadiobiologyGuidedFeatureSelector(
+                    organ=organ,
+                    clinical_data=train_df if 'train_df' in locals() and 'PrimaryPatientID' in train_df.columns else None,
+                    outcome_column='Observed_Toxicity'
+                )
                 X_train_df = pd.DataFrame(X_train, columns=feature_cols)
-                selected_features = selector.select_features(X_train_df, y_train, organ=organ)
+                selected_features = selector.select_features(
+                    X_train_df, y_train, organ=organ,
+                    max_features=adaptations['feature_selector_config'].get('max_features')
+                )
+                
+                # Store significant clinical factors
+                if hasattr(selector, 'significant_clinical_factors') and selector.significant_clinical_factors:
+                    adaptations['significant_clinical_factors'] = selector.significant_clinical_factors
+                    print(f"  - Significant clinical factors: {selector.significant_clinical_factors}")
                 
                 print(f"\n[DEBUG] After feature selection:")
                 print(f"  - Selected features: {selected_features}")
@@ -963,7 +1082,7 @@ class MachineLearningModels:
         # Train ANN
         print(f"     Training ANN...")
         
-        # V2.0: Use OverfitResistantMLModels if available
+        # V2.0: Use OverfitResistantMLModels if available, with adaptations
         if use_v2_components:
             try:
                 ml_model = OverfitResistantMLModels(
@@ -973,7 +1092,20 @@ class MachineLearningModels:
                     random_seed=self.random_state
                 )
                 ann_model = ml_model.create_ann_model()
+                
+                # NEW: Apply small dataset adaptations
+                ann_config = adaptations['model_config'].get('ann', {})
+                if ann_config:
+                    # Update ANN parameters
+                    if 'hidden_layer_sizes' in ann_config:
+                        ann_model.hidden_layer_sizes = ann_config['hidden_layer_sizes']
+                    if 'max_iter' in ann_config:
+                        ann_model.max_iter = ann_config['max_iter']
+                    if 'alpha' in ann_config:
+                        ann_model.alpha = ann_config['alpha']
+                
                 print(f"       EPV: {ml_model.epv:.2f} events per variable")
+                print(f"       ANN Config: hidden_layers={ann_model.hidden_layer_sizes}, alpha={ann_model.alpha}")
                 # Fit the model before using it
                 ann_model.fit(X_train, y_train)
             except Exception as e:
@@ -1032,7 +1164,7 @@ class MachineLearningModels:
         if XGBOOST_AVAILABLE:
             print(f"     Training XGBoost...")
             
-            # V2.0: Use OverfitResistantMLModels if available
+            # V2.0: Use OverfitResistantMLModels if available, with adaptations
             if use_v2_components:
                 try:
                     if 'ml_model' not in locals():
@@ -1043,6 +1175,19 @@ class MachineLearningModels:
                             random_seed=self.random_state
                         )
                     xgb_model = ml_model.create_xgboost_model()
+                    
+                    # NEW: Apply small dataset adaptations
+                    xgb_config = adaptations['model_config'].get('xgboost', {})
+                    if xgb_config and xgb_model is not None:
+                        # Update XGBoost parameters
+                        if 'n_estimators' in xgb_config:
+                            xgb_model.n_estimators = xgb_config['n_estimators']
+                        if 'max_depth' in xgb_config:
+                            xgb_model.max_depth = xgb_config['max_depth']
+                        if 'learning_rate' in xgb_config:
+                            xgb_model.learning_rate = xgb_config['learning_rate']
+                        print(f"       XGBoost Config: n_estimators={xgb_model.n_estimators}, max_depth={xgb_model.max_depth}, lr={xgb_model.learning_rate}")
+                    
                     # Fit the model before using it
                     if xgb_model is not None:
                         xgb_model.fit(X_train, y_train)

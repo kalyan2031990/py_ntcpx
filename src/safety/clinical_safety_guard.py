@@ -104,20 +104,30 @@ class ClinicalSafetyGuard:
             try:
                 for i in range(n_patients):
                     if X_features.ndim == 2:
-                        ccs = self.ccs_calculator.calculate_ccs(X_features[i])
+                        ccs_result = self.ccs_calculator.calculate_ccs(X_features[i])
                     else:
-                        ccs = self.ccs_calculator.calculate_ccs(X_features)
+                        ccs_result = self.ccs_calculator.calculate_ccs(X_features)
+                    
+                    # Extract CCS value from result (handles both dict and float returns)
+                    if isinstance(ccs_result, dict):
+                        ccs = ccs_result.get('ccs', np.nan)
+                    else:
+                        ccs = ccs_result
                     
                     ccs_scores.append(ccs)
                     
                     # DO_NOT_USE flag if CCS < threshold
-                    do_not_use = ccs < self.ccs_threshold
-                    do_not_use_flags.append(do_not_use)
-                    
-                    if do_not_use:
-                        safety_flags.append(f"CCS_LOW (CCS={ccs:.3f} < {self.ccs_threshold})")
+                    if not np.isnan(ccs):
+                        do_not_use = ccs < self.ccs_threshold
+                        do_not_use_flags.append(do_not_use)
+                        
+                        if do_not_use:
+                            safety_flags.append(f"CCS_LOW (CCS={ccs:.3f} < {self.ccs_threshold})")
+                        else:
+                            safety_flags.append("")
                     else:
-                        safety_flags.append("")
+                        do_not_use_flags.append(False)
+                        safety_flags.append("CCS_CALCULATION_FAILED")
             except Exception as e:
                 warnings.warn(f"CCS calculation failed: {e}")
                 ccs_scores = [np.nan] * n_patients
