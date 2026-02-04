@@ -85,11 +85,21 @@ STEP3_*.md
 STEP4_*.md
 STEP5_*.md
 FIXES_AND_IMPROVEMENTS.md
+FIXES_v3.0.0_to_v3.0.1.md
 GIT_*.md
 GITHUB_*.md
 *_COMPLETE_RESULTS_REPORT.md
+COMPLETE_RESULTS_REPORT.md
 CLEANUP_*.md
 RELEASE_NOTES_*_CLEAN.md
+INVESTIGATION_ISSUE*.md
+VERIFICATION_REPORT.md
+test_report.md
+
+# Pipeline run artifacts (local only)
+out3/
+input_txtdvh/
+corrected_dataset2.xlsx
 
 # Log files (already covered by *.log but explicit)
 full_pipeline_run.log

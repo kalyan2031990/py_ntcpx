@@ -1,7 +1,7 @@
-# py_ntcpx v3.0.0 - Complete Output Structure and Information
+# py_ntcpx - Complete Output Structure and Information
 
-**Version**: 3.0.0 (v3.0.1 fixes applied)  
-**Date**: February 2025
+**Version**: 3.0.0 (v3.0.1–3.0.3 fixes merged)  
+**Date**: February 2026
 
 ---
 
@@ -35,7 +35,7 @@ The py_ntcpx v3.0.0 pipeline generates comprehensive outputs organized by proces
 ## Output Directory Structure
 
 ```
-out2/
+out2/  (or custom --output_dir)
 ├── code0_output/                    # Step 0: Clinical Reconciliation
 │   └── clinical_reconciled.xlsx
 │
@@ -70,7 +70,7 @@ out2/
 │   └── enhanced_analysis_report.txt
 │
 ├── code4_output/                     # Step 4: QA Reporter
-│   ├── tables/                       # QA tables
+│   ├── tables/                       # QA tables (Table_X includes AUC_95CI in v3.0.2+)
 │   ├── comprehensive_report.docx    # Comprehensive QA report
 │   └── qa_summary_tables.xlsx
 │
@@ -110,6 +110,13 @@ out2/
 │
 ├── supp_results_summary_output/       # Step 8: Publication Tables
 │   └── publication_tables.xlsx
+│
+├── publication_bundle_YYYYMMDD/      # Step 9 (v3.0.3): Aggregated publication materials
+│   ├── manuscript_materials/
+│   ├── tables/
+│   ├── figures/
+│   ├── tiered/
+│   └── README.md
 │
 └── contracts/                        # Data Contracts (QA)
     ├── Step1_DVHRegistry.xlsx
@@ -693,11 +700,9 @@ ntcp = model.predict_proba(X_scaled)[0, 1]
 
 - **Pipeline Documentation**: See `README.md` and `ARCHITECTURE_REPORT.md`
 - **Version Information**: See `CHANGELOG_v3.0.0.md`
-- **Test Results**: See `test_report.md`
 
 ---
 
 **Document Version**: 3.0.0  
-**Last Updated**: February 2026  
-**Pipeline Run**: 2026-02-04 (input_txtdvh, corrected_dataset2.xlsx)
+**Last Updated**: February 2026
 
