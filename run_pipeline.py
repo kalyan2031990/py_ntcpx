@@ -580,6 +580,19 @@ class PipelineOrchestrator:
         
         return self.run_command(cmd, "Step 8: Publication Tables Summary")
     
+    def step9_publication_bundle(self) -> bool:
+        """Step 9: Create publication_bundle_YYYYMMDD/ with aggregated materials"""
+        bundle_script = Path("scripts/create_publication_bundle.py")
+        if not bundle_script.exists():
+            logger.warning(f"Publication bundle script not found: {bundle_script}. Skipping.")
+            return True
+        cmd = [
+            sys.executable,
+            str(bundle_script),
+            "--output_dir", str(self.base_output_dir)
+        ]
+        return self.run_command(cmd, "Step 9: Publication Bundle")
+    
     def run_complete_pipeline(self, input_txt_dir: Path, patient_data_file: Path,
                             clinical_file: Optional[Path] = None,
                             skip_steps: Optional[list] = None,
@@ -621,7 +634,8 @@ class PipelineOrchestrator:
             ('step5', 5, "Clinical Factors Analysis", lambda: self.step5_factors_analysis(reconciled_file_container['file'])),
             ('step6', 6, "Publication Diagrams", self.step6_publication_diagrams),
             ('step7', 7, "True-Model SHAP (Clinical Grade)", self.step7_shap_true),
-            ('step8', 8, "Publication Tables Summary", lambda: self.step8_supp_results_summary(clinical_file))
+            ('step8', 8, "Publication Tables Summary", lambda: self.step8_supp_results_summary(clinical_file)),
+            ('step9', 9, "Publication Bundle", self.step9_publication_bundle)
         ]
         
         # Handle resume_from
@@ -755,7 +769,7 @@ Software: py_ntcpx v3.0.0
         '--resume_from',
         type=str,
         default=None,
-        choices=['step1', 'step0', 'step2', 'step2b', 'step3', 'step3b', 'step3c', 'step4', 'step5', 'step6', 'step7'],
+        choices=['step1', 'step0', 'step2', 'step2b', 'step3', 'step3b', 'step3c', 'step4', 'step5', 'step6', 'step7', 'step8', 'step9'],
         help='Resume pipeline from a specific step (validates required contracts before continuing)'
     )
     

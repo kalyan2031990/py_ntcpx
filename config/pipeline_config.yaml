@@ -4,6 +4,7 @@
 pipeline:
   version: "3.0.0"
   random_seed: 42
+  default_output_dir: "out2"
   
 validation:
   method: "nested_cv"  # Options: nested_cv, train_test_split, loocv

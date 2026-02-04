@@ -14,10 +14,19 @@ All random operations use fixed seeds for reproducibility:
 
 ### Setting Random Seeds
 
-The random seed can be configured in:
-- `config/pipeline_config.yaml`: `pipeline.random_seed`
-- `code3_ntcp_analysis_ml.py`: `MachineLearningModels(random_state=42)`
-- `src/validation/data_splitter.py`: `PatientDataSplitter(random_seed=42)`
+**Source of truth**: `config/pipeline_config.yaml` → `pipeline.random_seed` (default: 42)
+
+| Location | Usage |
+|----------|-------|
+| `config/pipeline_config.yaml` | `pipeline.random_seed` – central config |
+| `code3_ntcp_analysis_ml.py` | `MachineLearningModels(random_state=...)` – reads from config |
+| `src/validation/data_splitter.py` | `PatientDataSplitter(random_seed=42)` – default |
+| `src/validation/nested_cv.py` | `NestedCV(random_seed=42)` – default |
+| `src/models/machine_learning/ml_models.py` | `OverfitResistantMLModels(random_seed=42)` – default |
+| `src/models/uncertainty/monte_carlo_ntcp.py` | `MonteCarloNTCP(random_seed=42)` – default |
+| `src/metrics/auc_calculator.py` | Bootstrap uses `np.random` – call `np.random.seed(42)` before if needed |
+
+To change the seed globally, edit `config/pipeline_config.yaml`. Code3 (main NTCP+ML pipeline) reads from this config.
 
 ## Dependencies
 
@@ -231,5 +240,5 @@ For reproducibility issues, please:
 
 ---
 
-*Last updated: 2025-02-04*
-*Version: 3.0.0*
+*Last updated: 2026-02-04*
+*Version: 3.0.2*

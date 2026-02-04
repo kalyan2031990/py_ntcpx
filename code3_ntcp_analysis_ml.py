@@ -3185,10 +3185,15 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     print("Enhanced NTCP Analysis: Traditional + Machine Learning Models")
     print("=" * 65)
     
-    # Initialize components
+    # Initialize components (random_seed from config/pipeline_config.yaml)
     dvh_processor = DVHProcessor(dvh_dir)
     ntcp_calc = NTCPCalculator()
-    ml_models = MachineLearningModels()
+    try:
+        from src.utils.config_loader import get_random_seed
+        random_seed = get_random_seed()
+    except ImportError:
+        random_seed = 42
+    ml_models = MachineLearningModels(random_state=random_seed)
     
     # Load patient data from Clinical Contract v2 reconciled file
     # Note: patient_data_file parameter is kept for backward compatibility but not used

@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""
+create_publication_bundle.py - Create timestamped publication bundle
+====================================================================
+
+Creates publication_bundle_YYYYMMDD/ with all publication-ready materials
+aggregated from pipeline outputs. Use for archival and journal submission.
+
+Usage:
+    python scripts/create_publication_bundle.py --output_dir out2
+    python scripts/create_publication_bundle.py --output_dir out2 --base_dir out2
+
+Software: py_ntcpx v3.0.x
+"""
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def create_publication_bundle(base_dir: Path) -> Path | None:
+    """
+    Create publication_bundle_YYYYMMDD/ with aggregated materials.
+    
+    Args:
+        base_dir: Base output directory (e.g., out2/) containing step outputs
+        
+    Returns:
+        Path to created bundle, or None if failed
+    """
+    base_dir = Path(base_dir).resolve()
+    if not base_dir.exists():
+        print(f"[ERROR] Base directory not found: {base_dir}", file=sys.stderr)
+        return None
+    
+    date_str = datetime.now().strftime("%Y%m%d")
+    bundle_dir = base_dir / f"publication_bundle_{date_str}"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    
+    copied = 0
+    skipped = 0
+    
+    def safe_copy(src: Path, dst: Path, desc: str = "") -> bool:
+        nonlocal copied, skipped
+        if not src.exists():
+            skipped += 1
+            return False
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            copied += 1
+            return True
+        except Exception as e:
+            print(f"[WARN] Failed to copy {src}: {e}", file=sys.stderr)
+            skipped += 1
+            return False
+    
+    # 1. Manuscript materials (code3)
+    mm = base_dir / "code3_output" / "manuscript_materials"
+    if mm.exists():
+        safe_copy(mm, bundle_dir / "manuscript_materials", "manuscript_materials")
+    
+    # 2. Publication tables (supp_results_summary)
+    pt = base_dir / "supp_results_summary_output" / "publication_tables.xlsx"
+    if pt.exists():
+        (bundle_dir / "tables").mkdir(exist_ok=True)
+        safe_copy(pt, bundle_dir / "tables" / "publication_tables.xlsx")
+    
+    # 3. Table X (code4)
+    tx_dir = base_dir / "code4_output" / "tables"
+    if tx_dir.exists():
+        (bundle_dir / "tables").mkdir(exist_ok=True)
+        for f in tx_dir.glob("Table_X*"):
+            safe_copy(f, bundle_dir / "tables" / f.name)
+    
+    # 4. QA report (code4)
+    qa_report = base_dir / "code4_output" / "comprehensive_report.docx"
+    if qa_report.exists():
+        safe_copy(qa_report, bundle_dir / "comprehensive_report.docx")
+    qa_tables = base_dir / "code4_output" / "qa_summary_tables.xlsx"
+    if qa_tables.exists():
+        safe_copy(qa_tables, bundle_dir / "qa_summary_tables.xlsx")
+    
+    # 5. Publication diagrams (code6)
+    code6 = base_dir / "code6_output"
+    if code6.exists():
+        fig_dir = bundle_dir / "figures" / "publication_diagrams"
+        fig_dir.mkdir(parents=True, exist_ok=True)
+        for f in code6.glob("*"):
+            if f.is_file():
+                safe_copy(f, fig_dir / f.name)
+    
+    # 6. SHAP/LIME (code7_shap) - key figures only
+    code7 = base_dir / "code7_shap"
+    if code7.exists():
+        shap_bundle = bundle_dir / "figures" / "shap_lime"
+        for organ_dir in code7.iterdir():
+            if organ_dir.is_dir():
+                for model_dir in organ_dir.iterdir():
+                    if model_dir.is_dir():
+                        for f in model_dir.glob("shap_*.png"):
+                            dst = shap_bundle / organ_dir.name / model_dir.name
+                            safe_copy(f, dst / f.name)
+                        for f in model_dir.glob("lime_explanation_*.png"):
+                            dst = shap_bundle / organ_dir.name / model_dir.name
+                            safe_copy(f, dst / f.name)
+    
+    # 7. NTCP results (code3)
+    nr = base_dir / "code3_output" / "ntcp_results.xlsx"
+    if nr.exists():
+        (bundle_dir / "tables").mkdir(exist_ok=True)
+        safe_copy(nr, bundle_dir / "tables" / "ntcp_results.xlsx")
+    
+    # 8. Tiered output (key files)
+    tiered = base_dir / "tiered_output"
+    if tiered.exists():
+        tiered_bundle = bundle_dir / "tiered"
+        tiered_bundle.mkdir(exist_ok=True)
+        for name in ["NTCP_4Tier_Master.xlsx", "tiered_ntcp_results.xlsx", "dose_response_Parotid.png"]:
+            f = tiered / name
+            if f.exists():
+                safe_copy(f, tiered_bundle / name)
+    
+    # 9. README
+    readme = bundle_dir / "README.md"
+    try:
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(f"""# Publication Bundle - {date_str}
+
+Generated by py_ntcpx create_publication_bundle.py
+
+## Contents
+
+- `manuscript_materials/` - Figures, tables, methods from code3
+- `tables/` - publication_tables.xlsx, Table_X_Classical_vs_ML, ntcp_results.xlsx
+- `figures/publication_diagrams/` - Workflow, methodology, model spectrum figures
+- `figures/shap_lime/` - SHAP and LIME explanations by organ/model
+- `tiered/` - Tiered NTCP analysis outputs
+- `comprehensive_report.docx` - QA report
+- `qa_summary_tables.xlsx` - Per-organ summary
+
+## Usage
+
+Use these materials for journal submission. All figures are publication-ready (600 DPI where applicable).
+""")
+    except Exception as e:
+        print(f"[WARN] Could not write README: {e}", file=sys.stderr)
+    
+    print(f"[OK] Publication bundle created: {bundle_dir}")
+    print(f"     Copied: {copied} items, Skipped (missing): {skipped}")
+    return bundle_dir
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Create timestamped publication bundle")
+    parser.add_argument("--output_dir", "--base_dir", dest="base_dir", default="out2",
+                        help="Base output directory (default: out2)")
+    args = parser.parse_args()
+    
+    base = Path(args.base_dir).expanduser().resolve()
+    result = create_publication_bundle(base)
+    return 0 if result else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
