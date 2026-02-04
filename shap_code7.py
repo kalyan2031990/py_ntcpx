@@ -519,9 +519,11 @@ def generate_lime_explanations(model, X_train, X_test, feature_names, output_dir
                 html_file = output_dir / f"lime_explanation_{patient_idx}.html"
                 explanation.save_to_file(str(html_file))
                 
-                # Save PNG figure
+                # Save PNG figure (use label from local_exp to avoid KeyError: 1)
                 try:
-                    fig = explanation.as_pyplot_figure()
+                    labels_available = list(explanation.local_exp.keys())
+                    label = labels_available[0] if labels_available else 1
+                    fig = explanation.as_pyplot_figure(label=label)
                     png_file = output_dir / f"lime_explanation_{patient_idx}.png"
                     fig.savefig(png_file, dpi=300, bbox_inches='tight')
                     plt.close(fig)

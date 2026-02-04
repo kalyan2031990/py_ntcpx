@@ -698,6 +698,14 @@ def generate_table_X(ntcp_df, clinical_df, output_dir):
         roc_auc_score = None
         brier_score_loss = None
     
+    try:
+        from src.metrics.auc_calculator import calculate_auc_with_ci
+    except ImportError:
+        try:
+            from metrics.auc_calculator import calculate_auc_with_ci
+        except ImportError:
+            calculate_auc_with_ci = None
+    
     # Helper functions for metrics
     def compute_auc(y_true, y_pred):
         """Compute AUC (ROC)"""
@@ -711,6 +719,22 @@ def generate_table_X(ntcp_df, clinical_df, output_dir):
             return float(roc_auc_score(y_true, y_pred))
         except Exception:
             return float("nan")
+    
+    def compute_auc_ci(y_true, y_pred, n_bootstrap=1000):
+        """Compute AUC with 95% CI (bootstrap)"""
+        if calculate_auc_with_ci is None or roc_auc_score is None:
+            return float("nan"), float("nan"), float("nan")
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        if len(y_true) < 5 or len(np.unique(y_true)) < 2:
+            return float("nan"), float("nan"), float("nan")
+        try:
+            auc, (ci_low, ci_high) = calculate_auc_with_ci(
+                y_true, y_pred, method='bootstrap', n_bootstraps=min(n_bootstrap, len(y_true) * 20)
+            )
+            return float(auc), float(ci_low), float(ci_high)
+        except Exception:
+            return float("nan"), float("nan"), float("nan")
     
     def compute_brier_score(y_true, y_pred):
         """Compute Brier score"""
@@ -882,14 +906,21 @@ def generate_table_X(ntcp_df, clinical_df, output_dir):
         y_pred_valid = y_pred[valid_mask]
         
         auc = compute_auc(y_true_valid, y_pred_valid)
+        auc_val, ci_low, ci_high = compute_auc_ci(y_true_valid, y_pred_valid)
         brier = compute_brier_score(y_true_valid, y_pred_valid)
         slope, intercept = compute_calibration_slope_intercept(y_true_valid, y_pred_valid)
         ccs = compute_cohort_consistency_score(y_pred_valid)
+        
+        # Format AUC 95% CI as "lower-upper" or NaN
+        auc_95ci = np.nan
+        if not (np.isnan(ci_low) or np.isnan(ci_high)):
+            auc_95ci = f"{ci_low:.3f}-{ci_high:.3f}"
         
         rows.append({
             "Category": category,
             "Model": model_name,
             "AUC": round(auc, 3) if not np.isnan(auc) else np.nan,
+            "AUC_95CI": auc_95ci,
             "Brier": round(brier, 3) if not np.isnan(brier) else np.nan,
             "Calibration slope": round(slope, 3) if not np.isnan(slope) else np.nan,
             "Calibration intercept": round(intercept, 3) if not np.isnan(intercept) else np.nan,
