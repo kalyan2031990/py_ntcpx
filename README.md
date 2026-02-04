@@ -6,15 +6,15 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
 
 | Version | Status | Branch/Tag |
 |---------|--------|------------|
-| **v3.0.0** | Default public version | `main` |
+| **v3.0.0** | **Default public version** (Latest) | `main` |
 | **v2.1.0** | Previous stable release | `v2.1.0` tag |
 | **v2.0.0** | Previous stable release | `v2.0.0` tag |
-| **v1.2.1** | Frozen, legacy-stable | `v1.2.1` tag |
-| **v1.2.0** | Legacy release | `v1.2.0` tag |
-| **v1.1.0** | Legacy release | `v1.1.0` tag |
-| **v1.0.0** | Legacy release | `v1.0.0` tag |
+| v1.2.1 | Archived, legacy-stable | `v1.2.1` tag |
+| v1.2.0 | Archived, legacy | `v1.2.0` tag |
+| v1.1.0 | Archived, legacy | `v1.1.0` tag |
+| v1.0.0 | Archived, legacy | `v1.0.0` tag |
 
-All versions are available via git tags. For the latest features, use `main` (v3.0.0). For legacy workflows, use `git checkout v2.1.0` or other version tags. Non-canonical releases are archived in `archive/` for reproducibility only.
+**Active versions**: v3.0.0 (main) and v2.1.0 are fully supported. For the latest features, use `main` (v3.0.0). For legacy workflows, use `git checkout v2.1.0` or `v2.0.0`. Archived versions (v1.x) are available via git tags for reproducibility only.
 
 ## Quick start
 
