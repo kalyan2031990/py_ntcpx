@@ -6,7 +6,7 @@ Data Validation Tests for py_ntcpx v1.0
 Tests for data format validation, edge cases, and error handling.
 Does not modify existing code.
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 import unittest

@@ -6,7 +6,7 @@ Comprehensive Test Suite for py_ntcpx v1.0
 Unit tests, integration tests, and validation tests for the NTCP pipeline.
 Tests all components without modifying existing code.
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 import unittest

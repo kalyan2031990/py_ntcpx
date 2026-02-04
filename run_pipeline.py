@@ -14,7 +14,7 @@ Orchestrates the complete py_ntcpx v1.0 pipeline execution:
 8. shap_code7 (True-Model SHAP - Clinical Grade)
 9. supp_results_summary (NEW - Publication tables)
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 from __future__ import annotations
@@ -711,7 +711,7 @@ Pipeline execution order:
 8. shap_code7 - True-Model SHAP analysis (Clinical Grade)
 9. supp_results_summary - Publication tables (NEW)
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
         """
     )
     

@@ -1,3 +1,3 @@
 """
-Test suite for py_ntcpx v2.0
+Test suite for py_ntcpx v3.0
 """

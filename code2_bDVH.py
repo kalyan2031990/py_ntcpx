@@ -23,7 +23,7 @@ References:
 - Emami B, Lyman J, Brown A, et al. Tolerance of normal tissue to therapeutic
   irradiation. Int J Radiat Oncol Biol Phys. 1991;21(1):109-122.
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 from __future__ import annotations
@@ -696,7 +696,7 @@ References:
 - Bentzen SM et al. (2010). QUANTEC: an introduction to the issue.
 - Emami B et al. (1991). Tolerance of normal tissue to therapeutic irradiation.
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
         """
     )
     

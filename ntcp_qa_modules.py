@@ -103,7 +103,12 @@ class CohortConsistencyScore:
     
     def calculate_dynamic_threshold(self, features):
         """
-        Calculate dynamic CCS threshold based on dataset characteristics
+        Calculate adaptive CCS threshold based on dataset size (v3.0.0)
+        
+        Implements scientifically honest thresholds for small cohorts:
+        - n < 30: Disable filtering (0.0) for tiny cohorts
+        - n 30-100: Conservative threshold (0.1) for small cohorts
+        - n >= 100: Standard threshold (0.2) for larger datasets
         
         Parameters
         ----------
@@ -113,47 +118,20 @@ class CohortConsistencyScore:
         Returns
         -------
         float
-            Dynamic threshold value
+            Adaptive threshold value
         """
         n_samples = len(features) if hasattr(features, '__len__') else self.n_samples
         
         if n_samples is None:
             return 0.2  # Default threshold
         
-        # Rule 1: For very small datasets (<30), use percentile-based threshold
+        # v3.0.0: Adaptive thresholds for honest small-cohort analysis
         if n_samples < 30:
-            try:
-                # Calculate Mahalanobis distances for all samples
-                distances = []
-                mean = np.mean(features, axis=0)
-                cov = np.cov(features.T) + np.eye(features.shape[1]) * 1e-6
-                cov_inv = np.linalg.pinv(cov)
-                
-                for i in range(len(features)):
-                    d_squared = mahalanobis(features[i], mean, cov_inv) ** 2
-                    distances.append(np.sqrt(d_squared))
-                
-                distances = np.array(distances)
-                
-                if len(np.unique(distances)) < 5:  # Very homogeneous
-                    # Use 95th percentile instead of fixed threshold
-                    threshold = np.percentile(distances, 95)
-                    threshold = max(threshold, 0.05)  # Minimum threshold
-                    return threshold
-            except Exception:
-                pass  # Fall through to default
-        
-        # Rule 2: For small datasets (30-100), use relaxed threshold
-        if n_samples < 100:
-            return 0.5  # More relaxed than 0.2
-        
-        # Rule 3: For medium datasets (100-200), use moderate threshold
-        elif n_samples < 200:
-            return 0.3
-        
-        # Rule 4: For large datasets, use strict threshold
+            return 0.0  # Disable filtering for tiny cohorts
+        elif n_samples < 100:
+            return 0.1  # Conservative threshold for small cohorts (like 54-patient case)
         else:
-            return 0.2
+            return 0.2  # Standard threshold for larger datasets
     
     def calculate_ccs(self, X_new):
         """Calculate Cohort Consistency Score using Mahalanobis distance"""

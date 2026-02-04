@@ -1,15 +1,20 @@
-# py_ntcpx — NTCP Analysis Pipeline (v2.0.0)
+# py_ntcpx — NTCP Analysis Pipeline (v3.0.0)
 
-NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, and SHAP-based interpretability.
+NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, SHAP-based interpretability, and LIME explanations.
 
 ## Version governance
 
 | Version | Status | Branch/Tag |
 |---------|--------|------------|
-| **v2.0.0** | Default public version | `main` |
+| **v3.0.0** | Default public version | `main` |
+| **v2.1.0** | Previous stable release | `v2.1.0` tag |
+| **v2.0.0** | Previous stable release | `v2.0.0` tag |
 | **v1.2.1** | Frozen, legacy-stable | `v1.2.1` tag |
+| **v1.2.0** | Legacy release | `v1.2.0` tag |
+| **v1.1.0** | Legacy release | `v1.1.0` tag |
+| **v1.0.0** | Legacy release | `v1.0.0` tag |
 
-Only v1.2.1 and v2.0.0 are canonical. For legacy workflows, use `git checkout v1.2.1`. Non-canonical releases are archived in `archive/` for reproducibility only.
+All versions are available via git tags. For the latest features, use `main` (v3.0.0). For legacy workflows, use `git checkout v2.1.0` or other version tags. Non-canonical releases are archived in `archive/` for reproducibility only.
 
 ## Quick start
 

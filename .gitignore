@@ -94,3 +94,5 @@ RELEASE_NOTES_*_CLEAN.md
 # Log files (already covered by *.log but explicit)
 full_pipeline_run.log
 pipeline_with_fixes.log
+execution_log.md
+test_output.txt

@@ -9,7 +9,7 @@ Generates reproducible, journal-grade scientific figures for py_ntcpx v1.0:
 - Figure 3: NTCP Modeling Spectrum
 - Figure 4: Explainable AI (SHAP) Integration
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 from __future__ import annotations
@@ -956,7 +956,7 @@ Generates publication-ready figures:
 
 All figures are saved as PNG (high-DPI) and SVG (vector) formats.
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
         """
     )
     
@@ -981,7 +981,7 @@ Software: py_ntcpx v1.0
     
     logger.info("=" * 60)
     logger.info("Generating Journal-Grade Scientific Figures")
-    logger.info("Software: py_ntcpx v1.0")
+    logger.info("Software: py_ntcpx v3.0.0")
     logger.info("=" * 60)
     
     # Generate all figures with error handling

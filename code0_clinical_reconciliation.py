@@ -13,7 +13,7 @@ Responsibilities:
 4. Prompt user for auto-mapping acceptance
 5. Self-diagnostic executive: parse logs, tracebacks, contracts to detect issues
 
-Software: py_ntcpx v1.0 - Clinical Governance Upgrade
+Software: py_ntcpx v3.0.0 - Clinical Governance Upgrade
 """
 
 from __future__ import annotations

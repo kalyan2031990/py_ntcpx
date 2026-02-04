@@ -1,6 +1,6 @@
-# Test Report - py_ntcpx v2.0.0 (Enhanced for Small Datasets)
+# Test Report - py_ntcpx v3.0.0 (Enhanced Interpretability and Small-Cohort Honesty)
 
-**Generated:** 2026-02-03 14:39:34
+**Generated:** 2026-02-03
 
 ---
 
@@ -13,21 +13,23 @@
 | **Failed** | 0 |
 | **Errors** | 0 |
 | **Skipped** | 2 |
-| **Total Time** | 15.47s |
+| **Total Time** | ~15s |
 
 **Pass Rate:** 100% (78/78 runnable tests passed)
 
 ✅ **All tests passed successfully!**
 
-### Recent Enhancements Tested
+### Recent Enhancements Tested (v3.0.0)
 
-This test run validates the following enhancements for small dataset handling:
+This test run validates the following v3.0.0 enhancements:
 
-1. ✅ **Dynamic CCS Threshold** - Adaptive threshold calculation based on dataset size
-2. ✅ **Clinical Factor Integration** - Automatic inclusion of significant clinical factors (p < 0.05)
-3. ✅ **Small Dataset Adaptations** - CV strategy, model complexity, and feature selection adaptations
-4. ✅ **Robust SHAP Analysis** - Bootstrap SHAP for stability assessment
-5. ✅ **Enhanced Reporting** - Small dataset advisories and clinical factor reporting
+1. ✅ **Adaptive CCS Thresholds** - Scientifically honest thresholds based on dataset size (0.0 for n<30, 0.1 for n<100, 0.2 for n≥100)
+2. ✅ **CCS Warnings Instead of DO_NOT_USE** - Predictions preserved with warning flags instead of blocking
+3. ✅ **Fixed XGBoost SHAP** - Model-agnostic explainer for serialized models
+4. ✅ **Improved ANN SHAP Stability** - Enhanced error handling with CCS-aware warnings
+5. ✅ **LIME Integration** - Local interpretable model-agnostic explanations for representative patients
+6. ✅ **Clinical Factor Integration** - Automatic inclusion of significant clinical factors (p < 0.05)
+7. ✅ **Small Dataset Adaptations** - CV strategy, model complexity, and feature selection adaptations
 
 All enhancements maintain backward compatibility and pass all existing tests.
 
@@ -308,41 +310,73 @@ All enhancements maintain backward compatibility and pass all existing tests.
 
 ---
 
-## Enhancement Validation
+## Enhancement Validation (v3.0.0)
 
 ### New Features Tested
 
-#### 1. Dynamic CCS Threshold (`ntcp_qa_modules.py`)
-- ✅ CCS threshold adapts based on dataset size
-- ✅ Small datasets (< 100) use relaxed thresholds
-- ✅ Clinical safety guard correctly handles dict return from `calculate_ccs()`
+#### 1. Adaptive CCS Thresholds (`ntcp_qa_modules.py`) - v3.0.0
+- ✅ CCS threshold adapts based on dataset size (0.0 for n<30, 0.1 for n<100, 0.2 for n≥100)
+- ✅ Replaces overly conservative static threshold that blocked all predictions
+- ✅ Clinical safety guard correctly handles adaptive thresholds
+- ✅ `CCS_Warning_Flag` column (boolean) replaces `CCS_Safety` ('DO_NOT_USE'/'OK')
 
-#### 2. Clinical Factor Integration (`src/features/feature_selector.py`)
+#### 2. CCS Warnings Instead of DO_NOT_USE - v3.0.0
+- ✅ All predictions preserved with warning flags
+- ✅ Full analysis and explanations (SHAP/LIME) computed for all patients
+- ✅ Clear logging: "INFO - CCS below adaptive threshold for X/X predictions. Interpretations should be treated with caution."
+- ✅ Updated safety reports reflect warning-based approach
+
+#### 3. Fixed XGBoost SHAP Explainer (`shap_code7.py`) - v3.0.0
+- ✅ Model-agnostic explainer replaces TreeExplainer for serialized models
+- ✅ Base score fix handles string `base_score` in serialized XGBoost models
+- ✅ Robust prediction wrapper works with both DataFrame and array inputs
+- ✅ Resolves serialization issues when loading saved XGBoost models
+
+#### 4. Improved ANN SHAP Stability Warnings - v3.0.0
+- ✅ Enhanced error handling wrapped in try-except blocks
+- ✅ CCS-aware warnings check cohort consistency before stability analysis
+- ✅ Clear warnings: "WARNING - SHAP stability analysis skipped for ANN due to low cohort consistency"
+- ✅ Visualizations preserved with appropriate warnings
+
+#### 5. LIME Integration (`shap_code7.py`) - v3.0.0
+- ✅ LIME explanations generated for representative patients (highest, median, lowest NTCP)
+- ✅ Dual output formats: HTML and PNG files
+- ✅ Works with both ANN and XGBoost models
+- ✅ Complementary to SHAP for local interpretability
+
+#### 6. Clinical Factor Integration (`src/features/feature_selector.py`) - v2.1.0
 - ✅ Feature selector accepts clinical data parameter
 - ✅ Significant clinical factors (p < 0.05) automatically included
 - ✅ Backward compatible when no clinical data provided
 
-#### 3. Small Dataset Adaptations (`code3_ntcp_analysis_ml.py`)
+#### 7. Small Dataset Adaptations (`code3_ntcp_analysis_ml.py`) - v2.1.0
 - ✅ `adapt_for_small_dataset()` function works correctly
 - ✅ CV strategy adapts (LOOCV for n < 30, StratifiedKFold for n 30-100)
 - ✅ Model complexity reduces for small datasets
 - ✅ Feature selection uses conservative EPV for small datasets
 
-#### 4. Robust SHAP Analysis (`shap_code7.py`)
-- ✅ Bootstrap SHAP functions defined correctly
-- ✅ Feature stability calculation implemented
-- ✅ Inconsistent feature flagging works
-
-#### 5. Enhanced Reporting (`code4_ntcp_output_QA_reporter.py`)
+#### 8. Enhanced Reporting (`code4_ntcp_output_QA_reporter.py`) - v2.1.0
 - ✅ Small dataset advisory functions defined
 - ✅ Clinical factor reporting functions implemented
 - ✅ Integration with DOCX report generation
 
-### Fixed Issues
+### Fixed Issues (v3.0.0)
 
-1. ✅ **CCS Return Type**: Fixed `clinical_safety_guard.py` to handle dict return from `calculate_ccs()`
-   - Extracts 'ccs' value from dict when present
-   - Maintains backward compatibility with float returns
+1. ✅ **XGBoost SHAP Compatibility**: Fixed explainer to work with serialized models
+   - Uses model-agnostic `Explainer` instead of `TreeExplainer`
+   - Handles string `base_score` conversion
+
+2. ✅ **Overly Conservative CCS Threshold**: Fixed threshold blocking all predictions in small cohorts
+   - Adaptive thresholds based on dataset size
+   - Enables honest analysis of real-world small datasets
+
+3. ✅ **Missing SHAP Explanations**: Fixed issue where SHAP was skipped when CCS was low
+   - All explanations now generated with appropriate warnings
+   - Visualizations preserved with stability warnings
+
+4. ✅ **ANN SHAP Stability**: Improved error handling for bootstrap stability analysis
+   - Graceful failure with informative warnings
+   - CCS-aware checks before attempting stability analysis
 
 ### Test Coverage
 

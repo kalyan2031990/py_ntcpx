@@ -11,7 +11,7 @@ Auto-generates all publication tables and appendix for journal submission:
 - Appendix A1: Model & Equation Reference
 - Appendix A2: Computational Reproducibility
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
 """
 
 from __future__ import annotations
@@ -721,7 +721,7 @@ Generates comprehensive publication tables:
 - Appendix A1: Model & Equation Reference
 - Appendix A2: Computational Reproducibility
 
-Software: py_ntcpx v1.0
+Software: py_ntcpx v3.0.0
         """
     )
     

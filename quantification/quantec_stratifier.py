@@ -10,7 +10,7 @@ Assigns each patient-organ to a QUANTEC dose-risk bin and computes per-bin:
 
 Generates quantec_validation_[Organ].xlsx for each organ.
 
-Software: py_ntcpx v1.0 - Clinical Governance Upgrade
+Software: py_ntcpx v3.0.0 - Clinical Governance Upgrade
 """
 
 from __future__ import annotations

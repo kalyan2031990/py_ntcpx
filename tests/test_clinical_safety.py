@@ -117,7 +117,8 @@ class TestClinicalSafetyGuard(unittest.TestCase):
         
         self.assertIn("CLINICAL SAFETY REPORT", report)
         self.assertIn("Total Predictions", report)
-        self.assertIn("DO_NOT_USE Flags", report)
+        # v3.0.0: Changed to "CCS Warnings" instead of "DO_NOT_USE Flags"
+        self.assertIn("CCS Warnings", report)
     
     def test_safety_report_save(self):
         """Test saving safety report to file"""

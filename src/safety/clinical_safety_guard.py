@@ -29,24 +29,32 @@ class ClinicalSafetyGuard:
     - CCS < 0.2 → DO_NOT_USE flag
     """
     
-    def __init__(self, ccs_threshold: float = 0.2, ci_alpha: float = 0.05):
+    def __init__(self, ccs_threshold: float = None, ci_alpha: float = 0.05, n_samples: int = None):
         """
-        Initialize clinical safety guard
+        Initialize clinical safety guard (v3.0.0: adaptive thresholds)
         
         Parameters
         ----------
-        ccs_threshold : float
-            CCS threshold below which DO_NOT_USE flag is set (default: 0.2)
+        ccs_threshold : float, optional
+            CCS threshold (if None, will be set adaptively based on n_samples)
         ci_alpha : float
             Significance level for CI (default: 0.05 for 95% CI)
+        n_samples : int, optional
+            Number of samples for adaptive threshold calculation
         """
-        self.ccs_threshold = ccs_threshold
+        self.n_samples = n_samples
         self.ci_alpha = ci_alpha
         self.ccs_calculator = None
         self.training_stats = None
         
         if CCS_AVAILABLE:
-            self.ccs_calculator = CohortConsistencyScore()
+            self.ccs_calculator = CohortConsistencyScore(n_samples=n_samples)
+            # Use adaptive threshold from calculator if not explicitly set
+            if ccs_threshold is None:
+                # Will be set after fit() is called
+                self.ccs_threshold = None
+            else:
+                self.ccs_threshold = ccs_threshold
     
     def fit(self, X_train: np.ndarray):
         """
@@ -59,6 +67,9 @@ class ClinicalSafetyGuard:
         """
         if self.ccs_calculator is not None:
             self.ccs_calculator.fit(X_train)
+            # v3.0.0: Get adaptive threshold from calculator after fitting
+            if self.ccs_threshold is None:
+                self.ccs_threshold = self.ccs_calculator.ccs_threshold
             self.training_stats = {
                 'mean': np.mean(X_train, axis=0),
                 'std': np.std(X_train, axis=0),
@@ -116,18 +127,22 @@ class ClinicalSafetyGuard:
                     
                     ccs_scores.append(ccs)
                     
-                    # DO_NOT_USE flag if CCS < threshold
-                    if not np.isnan(ccs):
-                        do_not_use = ccs < self.ccs_threshold
-                        do_not_use_flags.append(do_not_use)
+                    # v3.0.0: CCS_Warning flag instead of DO_NOT_USE
+                    # True if CCS < threshold (interpretations should be treated with caution)
+                    if not np.isnan(ccs) and self.ccs_threshold is not None:
+                        ccs_warning = ccs < self.ccs_threshold
+                        do_not_use_flags.append(ccs_warning)  # Reusing variable name for compatibility
                         
-                        if do_not_use:
-                            safety_flags.append(f"CCS_LOW (CCS={ccs:.3f} < {self.ccs_threshold})")
+                        if ccs_warning:
+                            safety_flags.append(f"CCS_WARNING (CCS={ccs:.3f} < {self.ccs_threshold:.3f})")
                         else:
                             safety_flags.append("")
                     else:
                         do_not_use_flags.append(False)
-                        safety_flags.append("CCS_CALCULATION_FAILED")
+                        if np.isnan(ccs):
+                            safety_flags.append("CCS_CALCULATION_FAILED")
+                        else:
+                            safety_flags.append("")
             except Exception as e:
                 warnings.warn(f"CCS calculation failed: {e}")
                 ccs_scores = [np.nan] * n_patients
@@ -210,11 +225,11 @@ class ClinicalSafetyGuard:
             "CLINICAL SAFETY REPORT",
             "=" * 60,
             f"Total Predictions: {n_total}",
-            f"DO_NOT_USE Flags: {n_do_not_use} ({n_do_not_use/n_total*100:.1f}%)",
+            f"CCS Warnings: {n_do_not_use} ({n_do_not_use/n_total*100:.1f}%)",
             f"High Underprediction Risk: {n_high_risk} ({n_high_risk/n_total*100:.1f}%)",
             "",
             "Safety Thresholds:",
-            f"  - CCS Threshold: {self.ccs_threshold} (CCS < threshold -> DO_NOT_USE)",
+            f"  - CCS Threshold: {self.ccs_threshold:.3f} (CCS < threshold -> Warning)",
             f"  - CI Alpha: {self.ci_alpha} ({(1-self.ci_alpha)*100:.0f}% CI)",
             "",
             "Recommendations:",
@@ -222,10 +237,10 @@ class ClinicalSafetyGuard:
         
         if n_do_not_use > 0:
             report_lines.append(
-                f"  WARNING: {n_do_not_use} predictions flagged DO_NOT_USE due to low CCS."
+                f"  INFO: {n_do_not_use} predictions have CCS below adaptive threshold."
             )
             report_lines.append(
-                "     These predictions should NOT be used for clinical decision-making."
+                "     Interpretations should be treated with caution."
             )
         
         if n_high_risk > 0:

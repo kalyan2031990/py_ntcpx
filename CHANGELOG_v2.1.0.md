@@ -1,14 +1,61 @@
 # Changelog - Version 2.1.0
 
-## Minor Release: py_ntcpx v2.1.0 - Small Dataset Enhancements
+## Extended Release: py_ntcpx v2.1.0 - Enhanced for Small Datasets
 
-This release enhances the pipeline to better handle small datasets (n < 100) while maintaining backward compatibility and scientific rigor.
+This release extends v2.0.0 with enhanced capabilities for small datasets (n < 100) while maintaining all the methodological rigor, statistical validation, and explainable AI features introduced in v2.0.0.
 
 **Release Date:** 2026-02-03
 
 ---
 
-## 🎯 Key Enhancements
+## 📋 All Features from v2.0.0
+
+### Data Integrity & Leakage Prevention
+- ✅ Patient-level data splitting with stratification
+- ✅ LeakageAudit utility for automated leakage detection
+- ✅ StandardScaler fit only on training data
+- ✅ Split-before-transform enforcement
+
+### Overfitting Prevention & Model Containment
+- ✅ EPV (Events Per Variable) enforcement (refuses to train if EPV < 5)
+- ✅ Auto feature reduction when EPV < 5
+- ✅ Conservative ML architectures (ANN, XGBoost)
+- ✅ Dynamic model complexity adjustment
+- ✅ Domain-guided feature selection
+
+### Statistical Rigor
+- ✅ Correct Monte Carlo NTCP with parameter uncertainty
+- ✅ Bootstrap confidence intervals for all metrics
+- ✅ DeLong test for AUC comparison with Bonferroni correction
+- ✅ Nested cross-validation for unbiased performance estimation
+- ✅ Calibration correction (Platt scaling, isotonic regression)
+
+### Clinical Safety Layer
+- ✅ ClinicalSafetyGuard with underprediction risk detection
+- ✅ Cohort Consistency Score (CCS) integration
+- ✅ DO_NOT_USE flags for unsafe predictions
+- ✅ Automated safety reports
+
+### Model Documentation
+- ✅ Auto-generated model cards
+- ✅ EXPLORATORY labels for ML models
+- ✅ Intended use, limitations, and failure modes documented
+
+### Outputs
+- ✅ 600 DPI figures
+- ✅ LaTeX tables for manuscript
+- ✅ Statistical reporting with confidence intervals
+- ✅ Comprehensive documentation
+
+### Reproducibility
+- ✅ Global random seed management
+- ✅ YAML configuration management
+- ✅ Dependency locking
+- ✅ Baseline capture for regression testing
+
+---
+
+## 🆕 New Enhancements in v2.1.0 - Small Dataset Support
 
 ### 1. Dynamic CCS Threshold (`ntcp_qa_modules.py`)
 - ✅ **Adaptive threshold calculation** based on dataset size
@@ -54,8 +101,22 @@ This release enhances the pipeline to better handle small datasets (n < 100) whi
 
 ---
 
-## 📊 Test Results
+## 📊 Test Coverage
 
+### v2.0.0 Baseline
+- **49 unit and integration tests** - All passing ✅
+- Test coverage includes:
+  - Data splitting and leakage prevention
+  - ML model training and validation
+  - Feature selection
+  - AUC calculation with CI
+  - Clinical safety checks
+  - DVH validation
+  - NTCP mathematics
+  - Calibration correction
+  - Auto feature reduction
+
+### v2.1.0 Additions
 - **Total Tests**: 80
 - **Passed**: 78 (100% of runnable tests)
 - **Failed**: 0
@@ -64,9 +125,47 @@ This release enhances the pipeline to better handle small datasets (n < 100) whi
 
 ---
 
-## 🔄 Migration Guide
+## 📁 Components
 
-### For Existing Users
+### Core Modules (from v2.0.0)
+- `src/validation/` - Data splitting, nested CV, leakage audit, calibration
+- `src/models/` - Traditional, ML, uncertainty, model cards
+- `src/features/` - Feature selection, auto reduction
+- `src/metrics/` - AUC with CI, DeLong test
+- `src/reporting/` - Statistical reporter, leakage detector
+- `src/visualization/` - High-resolution plots (600 DPI)
+- `src/safety/` - Clinical safety guard
+- `src/utils/` - Logging utilities
+
+### Configuration
+- `config/pipeline_config.yaml` - Centralized configuration
+- `requirements.txt` - Pinned dependencies
+
+### Tests
+- `tests/` - Comprehensive test suite (80 tests in v2.1.0)
+- `tests/baseline/` - Baseline capture for regression
+- `tests/regression/` - Regression tests
+
+### Scripts
+- `scripts/publication_checklist.py` - Quality verification
+
+---
+
+## 🔧 Breaking Changes
+
+### From v2.0.0 (Still Apply)
+- **BREAKING**: Train-test split now uses patient-level splitting (not row-level)
+- **BREAKING**: Models now refuse to train if EPV < 5 (was warning)
+- **BREAKING**: StandardScaler now fits only on training data
+
+### v2.1.0
+- **No breaking changes** - all enhancements are backward compatible
+
+---
+
+## 📝 Migration Guide
+
+### For Existing v2.0.0 Users
 
 **No breaking changes** - all enhancements are backward compatible:
 
@@ -75,7 +174,7 @@ This release enhances the pipeline to better handle small datasets (n < 100) whi
 3. **Small Dataset Adaptations**: Automatically applied when n < 100. No configuration needed.
 4. **SHAP Bootstrap**: Automatically runs for datasets < 100 samples. No changes needed.
 
-### New Parameters
+### New Parameters (Optional)
 
 ```python
 # Feature Selector with Clinical Data
@@ -89,22 +188,45 @@ selector = RadiobiologyGuidedFeatureSelector(
 ccs_calculator = CohortConsistencyScore(n_samples=len(X_train))  # NEW: Optional
 ```
 
+### For Users Migrating from v1.x
+
+See v2.0.0 migration guide for breaking changes. All v2.0.0 features are included in v2.1.0.
+
 ---
 
-## 📝 Files Modified
+## 🐛 Bug Fixes
 
-- `ntcp_qa_modules.py` - Dynamic CCS threshold
-- `src/features/feature_selector.py` - Clinical factor integration
-- `code3_ntcp_analysis_ml.py` - Small dataset adaptations
-- `shap_code7.py` - Bootstrap SHAP analysis
-- `code4_ntcp_output_QA_reporter.py` - Enhanced reporting
-- `src/safety/clinical_safety_guard.py` - CCS dict handling fix
-- `test_report.md` - Updated test results
+### From v2.0.0
+- Fixed data leakage in train-test split
+- Fixed StandardScaler fitting on test data
+- Fixed Monte Carlo NTCP parameter uncertainty propagation
+- Fixed AUC calculation without confidence intervals
+
+### v2.1.0
+- Fixed CCS return type handling in `clinical_safety_guard.py` - now correctly handles dict return from `calculate_ccs()`
+- Maintained backward compatibility for float returns
+
+---
+
+## 📚 Documentation
+
+- Comprehensive README updates
+- Reproducibility guide
+- API documentation
+- Methodology documentation
+- Small dataset handling guide (new in v2.1.0)
 
 ---
 
 ## 🎓 Scientific Improvements
 
+### From v2.0.0
+- Complete methodological overhaul to ensure rigorous quality and clinical safety
+- Enhanced machine learning capabilities with overfitting prevention
+- Statistical validation with proper confidence intervals
+- Explainable AI features with SHAP integration
+
+### v2.1.0 Additions
 1. **Better handling of small datasets** without sacrificing rigor
 2. **Automatic clinical factor integration** when statistically significant
 3. **Stability assessment** for feature importance via bootstrap SHAP
@@ -118,14 +240,18 @@ ccs_calculator = CohortConsistencyScore(n_samples=len(X_train))  # NEW: Optional
 - Repository: https://github.com/kalyan2031990/py_ntcpx
 - Documentation: See README.md and ARCHITECTURE_REPORT.md
 - Test Report: test_report.md
+- Previous Release: See CHANGELOG_v2.0.0.md
 
 ---
 
 ## 🙏 Acknowledgments
 
-This release focuses on making the pipeline more robust for real-world clinical datasets, which are often smaller than ideal. All changes maintain scientific rigor while providing appropriate warnings and adaptations.
+This release extends v2.0.0's methodological rigor with enhanced capabilities for real-world clinical datasets, which are often smaller than ideal. All changes maintain scientific rigor while providing appropriate warnings and adaptations.
 
 ---
 
-**Next Steps**: Continue collecting data to reach recommended sample sizes (≥150 patients for parotid NTCP) for more reliable model performance.
+**Release Date**: February 3, 2026  
+**Version**: 2.1.0  
+**Based on**: v2.0.0 (February 3, 2026)
 
+**Next Steps**: Continue collecting data to reach recommended sample sizes (≥150 patients for parotid NTCP) for more reliable model performance.

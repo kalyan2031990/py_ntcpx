@@ -61,7 +61,7 @@ class ModelCardGenerator:
                 'type': model_type,
                 'organ': organ,
                 'generated_date': datetime.now().isoformat(),
-                'version': '2.0.0'
+                'version': '3.0.0'
             },
             'intended_use': self._get_intended_use(model_type, organ),
             'training_data': {

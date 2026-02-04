@@ -3543,10 +3543,13 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                             # Fit CCS on training data
                             ccs_calculator.fit(X_features)
                             
-                            # Calculate CCS for each prediction
+                            # Calculate CCS for each prediction (v3.0.0: warnings instead of DO_NOT_USE)
                             ccs_values = []
                             ccs_warnings = []
-                            ccs_do_not_use = []
+                            ccs_warning_flags = []  # Boolean: True if CCS below adaptive threshold
+                            
+                            # Get adaptive threshold from calculator
+                            adaptive_threshold = ccs_calculator.ccs_threshold
                             
                             for idx in organ_indices:
                                 # Get features for this patient
@@ -3565,25 +3568,25 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                                     ccs_values.append(ccs_val)
                                     ccs_warnings.append(ccs_result['warning_level'])
                                     
-                                    # Safety rule: If CCS < 0.2, mark as DO_NOT_USE
-                                    if ccs_val < 0.2:
-                                        ccs_do_not_use.append('DO_NOT_USE')
-                                    else:
-                                        ccs_do_not_use.append('OK')
+                                    # v3.0.0: CCS_Warning flag (boolean) instead of DO_NOT_USE
+                                    # True if CCS below adaptive threshold (interpretations should be treated with caution)
+                                    ccs_warning_flag = ccs_val < adaptive_threshold
+                                    ccs_warning_flags.append(ccs_warning_flag)
                                 except Exception as e:
                                     ccs_values.append(np.nan)
                                     ccs_warnings.append('unknown')
-                                    ccs_do_not_use.append('UNKNOWN')
+                                    ccs_warning_flags.append(False)  # Default to False if calculation fails
                             
                             # Add CCS to results DataFrame
                             if len(ccs_values) == len(organ_indices):
                                 results_df.loc[organ_indices, 'CCS'] = ccs_values
                                 results_df.loc[organ_indices, 'CCS_Warning'] = ccs_warnings
-                                results_df.loc[organ_indices, 'CCS_Safety'] = ccs_do_not_use
+                                results_df.loc[organ_indices, 'CCS_Warning_Flag'] = ccs_warning_flags
                                 
-                                n_do_not_use = sum(1 for x in ccs_do_not_use if x == 'DO_NOT_USE')
-                                if n_do_not_use > 0:
-                                    print(f"  ⚠️ Warning: {n_do_not_use} predictions marked as DO_NOT_USE (CCS < 0.2)")
+                                # Log warning count
+                                n_warnings = sum(ccs_warning_flags)
+                                if n_warnings > 0:
+                                    print(f"  ⚠️ INFO - CCS below adaptive threshold ({adaptive_threshold:.2f}) for {n_warnings}/{len(organ_indices)} predictions. Interpretations should be treated with caution.")
                     except Exception as e:
                         print(f"  Warning: CCS calculation failed: {e}")
         else:
@@ -5692,7 +5695,7 @@ def main():
                         'All predictions are for research purposes only and should not be used for clinical decision-making without proper validation.'
                     )
                     doc.add_paragraph(
-                        'Software: py_ntcpx v2.0.0'
+                        'Software: py_ntcpx v3.0.0'
                     )
                     
                     methods_file = methods_dir / 'methods_models_equations.docx'

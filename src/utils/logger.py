@@ -1,5 +1,5 @@
 """
-Comprehensive structured logging for py_ntcpx v2.0
+Comprehensive structured logging for py_ntcpx v3.0
 """
 
 import logging

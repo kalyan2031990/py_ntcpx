@@ -8,7 +8,7 @@ exclude = ["archive*"]
 
 [project]
 name = "py_ntcpx"
-version = "2.0.0"
+version = "3.0.0"
 description = "NTCP analysis and ML pipeline for head & neck cancer"
 authors = [{name = "kalyan2031990"}]
 readme = "README.md"
