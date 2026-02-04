@@ -247,34 +247,36 @@ def run_shap_analysis(code3_dir, output_dir):
                     X_plot = X
                 
                 elif model_name == "XGBoost":
-                    # v3.0.0: Use model-agnostic explainer for XGBoost (fixes serialization issues)
-                    # Fix base_score if it's a string
+                    # Fix base_score if it's a string (serialization artifact)
                     if hasattr(model, 'base_score') and isinstance(model.base_score, str):
                         try:
                             model.base_score = float(model.base_score.strip('[]'))
                         except (ValueError, AttributeError):
                             model.base_score = 0.5  # Default fallback
                     
-                    # Create prediction function wrapper
-                    def xgb_predict_proba(X_input):
-                        """Wrapper for XGBoost prediction"""
-                        if isinstance(X_input, pd.DataFrame):
-                            X_input = X_input.values
-                        return model.predict_proba(X_input)[:, 1]
+                    # Use TreeExplainer for XGBoost (avoids numba/numpy trapz compatibility issues
+                    # with model-agnostic Explainer; TreeExplainer is native and faster)
+                    try:
+                        explainer = shap.TreeExplainer(model)
+                        shap_values = explainer.shap_values(X)
+                        if isinstance(shap_values, list):
+                            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+                    except Exception as tree_err:
+                        # Fallback to KernelExplainer if TreeExplainer fails (e.g. serialization)
+                        print(f"    TreeExplainer failed ({tree_err}), trying KernelExplainer...")
+                        background = X[:min(30, len(X))]
+                        def xgb_predict_proba(X_input):
+                            if isinstance(X_input, pd.DataFrame):
+                                X_input = X_input.values
+                            return model.predict_proba(X_input)[:, 1]
+                        explainer = shap.KernelExplainer(xgb_predict_proba, background)
+                        shap_values = explainer.shap_values(X)
+                        if isinstance(shap_values, list):
+                            shap_values = shap_values[0] if len(shap_values) > 0 else shap_values
                     
-                    # Use model-agnostic Explainer (more robust than TreeExplainer for serialized models)
-                    background = X[:min(50, len(X))]  # Use subset for background
-                    explainer = shap.Explainer(
-                        xgb_predict_proba,
-                        background,
-                        feature_names=feature_names
-                    )
-                    shap_values = explainer(X).values
-                    
-                    # Ensure 2D array
+                    shap_values = np.array(shap_values)
                     if len(shap_values.shape) > 2:
                         shap_values = shap_values.reshape(shap_values.shape[0], -1)
-                    shap_values = np.array(shap_values)
                     
                     X_plot = X
                 

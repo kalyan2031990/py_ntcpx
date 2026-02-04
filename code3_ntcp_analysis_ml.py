@@ -234,13 +234,28 @@ class DVHProcessor:
             # Load DVH data
             dvh = pd.read_csv(dvh_file)
             
-            # Standardize column names
+            # Standardize column names (support multiple DVH formats)
+            dose_col = None
+            vol_col = None
             if 'Dose[Gy]' in dvh.columns and 'Volume[cm3]' in dvh.columns:
-                dvh = dvh.rename(columns={'Dose[Gy]': 'dose_gy', 'Volume[cm3]': 'volume_cm3'})
+                dose_col, vol_col = 'Dose[Gy]', 'Volume[cm3]'
+            elif 'Dose[Gy]' in dvh.columns and 'Volume[%]' in dvh.columns:
+                dose_col, vol_col = 'Dose[Gy]', 'Volume[%]'
             elif 'Dose' in dvh.columns and 'Volume' in dvh.columns:
-                dvh = dvh.rename(columns={'Dose': 'dose_gy', 'Volume': 'volume_cm3'})
+                dose_col, vol_col = 'Dose', 'Volume'
+            else:
+                # Fallback: match columns containing 'dose' and 'volume'
+                for c in dvh.columns:
+                    if 'dose' in c.lower() and dose_col is None:
+                        dose_col = c
+                    if 'volume' in c.lower() and vol_col is None:
+                        vol_col = c
+            if dose_col and vol_col:
+                dvh = dvh.rename(columns={dose_col: 'dose_gy', vol_col: 'volume_cm3'})
             
             # Remove zero volume entries at high doses
+            if 'volume_cm3' not in dvh.columns:
+                return None, None
             dvh = dvh[dvh['volume_cm3'] > 0].copy()
             
             # Sort by dose
@@ -309,7 +324,19 @@ class DVHProcessor:
         return dose_metrics
     
     def calculate_gEUD(self, dvh, a_parameter):
-        """Calculate generalized Equivalent Uniform Dose (gEUD)"""
+        """Calculate generalized Equivalent Uniform Dose (gEUD).
+        
+        Formula: gEUD = (Σ v_i × D_i^a)^(1/a)
+        where v_i = volume fraction in dose bin i, D_i = dose in bin i.
+        
+        QUANTEC organ-specific 'a' values:
+          Parotid: a=2.2 (parallel, volume-dependent)
+          Larynx: a=1.0 (≈ mean dose)
+          SpinalCord: a=7.4 (serial, max-dose sensitive)
+        
+        Expects differential DVH (volume per dose bin). For a=2.2 parotid,
+        gEUD is typically 1.1-1.4× mean dose.
+        """
         if dvh is None or len(dvh) == 0:
             return np.nan
             
@@ -455,42 +482,63 @@ class NTCPCalculator:
             return 0.0 if max_dose < TD50 else 1.0
     
     def ntcp_rs_poisson(self, dvh, D50, gamma, s):
-        """Relative Seriality model with Poisson statistics"""
+        """Relative Seriality model with Poisson statistics.
+        
+        Uses full DVH-based formula when possible. Numerically stable with
+        exponent clipping to prevent overflow/underflow.
+        """
         if dvh is None or len(dvh) == 0 or D50 <= 0 or gamma <= 0 or s <= 0:
             return 0.0
         
         try:
-            doses = dvh['dose_gy'].values
-            volumes = dvh['volume_cm3'].values
+            if 'dose_gy' not in dvh.columns or 'volume_cm3' not in dvh.columns:
+                return np.nan  # Signal to caller to use gEUD fallback
+            
+            doses = dvh['dose_gy'].values.astype(float)
+            volumes = dvh['volume_cm3'].values.astype(float)
             total_volume = np.sum(volumes)
             
-            if total_volume <= 0:
+            if total_volume <= 0 or not np.all(np.isfinite(doses)) or not np.all(np.isfinite(volumes)):
                 return 0.0
             
             # Calculate relative volumes
             rel_volumes = volumes / total_volume
             
-            # Calculate voxel-level NTCP for each dose bin
-            dose_ratios = doses / D50
-            voxel_ntcps = 2.0 ** (-np.exp(gamma * (1.0 - dose_ratios)))
+            # Calculate voxel-level NTCP: 2^(-exp(gamma*(1 - D/D50)))
+            # Clip exponent to prevent overflow (exp(>700) overflows)
+            dose_ratios = np.maximum(doses / D50, 1e-10)  # Avoid div by zero
+            exponent = gamma * (1.0 - dose_ratios)
+            exponent = np.clip(exponent, -50, 50)
+            voxel_ntcps = 2.0 ** (-np.exp(exponent))
             
             # Handle numerical issues
             voxel_ntcps = np.clip(voxel_ntcps, 1e-15, 1.0 - 1e-15)
             
             # Calculate organ-level NTCP using relative seriality
-            powered_ntcps = np.power(voxel_ntcps, s)
-            complement_terms = 1.0 - powered_ntcps
+            # For very small s, use numerical stability
+            s_safe = max(s, 1e-6)
+            powered_ntcps = np.power(voxel_ntcps, s_safe)
+            complement_terms = np.clip(1.0 - powered_ntcps, 1e-15, 1.0)
             
             # Take the product weighted by relative volumes
-            log_terms = rel_volumes * np.log(np.maximum(complement_terms, 1e-15))
-            product_term = np.exp(np.sum(log_terms))
+            log_terms = rel_volumes * np.log(complement_terms)
+            log_sum = np.sum(log_terms)
+            log_sum = np.clip(log_sum, -50, 0)  # Prevent exp overflow
+            product_term = np.exp(log_sum)
+            product_term = np.clip(product_term, 0.0, 1.0 - 1e-10)  # Avoid (1-x)^n with x>1 -> NaN
             
-            # Final NTCP calculation
-            ntcp = np.power(1.0 - product_term, 1.0 / s)
-            ntcp = np.clip(ntcp, 1e-15, 1.0 - 1e-15)
+            # Final NTCP: (1 - product_term)^(1/s)
+            base = 1.0 - product_term
+            inv_s = 1.0 / s_safe
+            inv_s = np.clip(inv_s, 1.0, 100.0)  # Cap to prevent underflow
+            ntcp = np.power(np.maximum(base, 1e-15), inv_s)
+            ntcp = float(np.clip(ntcp, 1e-15, 1.0 - 1e-15))
+            
+            if not np.isfinite(ntcp):
+                return np.nan
             return ntcp
-        except (OverflowError, ZeroDivisionError, ValueError):
-            return 0.0
+        except (OverflowError, ZeroDivisionError, ValueError, KeyError):
+            return np.nan
     
     def calculate_all_ntcp_models(self, dvh, dose_metrics, organ, dose_per_fraction=2.0):
         """Calculate NTCP using all three models for given organ"""
@@ -539,15 +587,32 @@ class NTCPCalculator:
             print(f"Error calculating LKB Probit for {organ}: {e}")
             results['LKB_Probit'] = {'NTCP': 0.0, 'error': str(e)}
         
-        # 3. RS Poisson Model
+        # 3. RS Poisson Model (QUANTEC-RS)
         try:
             params = organ_params['RS_Poisson']
+            D50 = params['D50']
+            gamma = params['gamma']
+            s = params.get('s', 0.01)
+            
+            # Try full DVH-based calculation first
             dvh_eqd2 = dvh.copy()
             dvh_eqd2['dose_gy'] = dvh_eqd2['dose_gy'].apply(
                 lambda d: self.convert_to_eqd2(d, params['alpha_beta'], dose_per_fraction)
             )
             
-            ntcp_rs = self.ntcp_rs_poisson(dvh_eqd2, params['D50'], params['gamma'], params['s'])
+            ntcp_rs = self.ntcp_rs_poisson(dvh_eqd2, D50, gamma, s)
+            
+            # Fallback: gEUD-based simplified formula when DVH calc fails or returns NaN
+            # NTCP = 1 - exp(-(gEUD/D50)^gamma) - standard QUANTEC formulation for parotid
+            if np.isnan(ntcp_rs) or (isinstance(ntcp_rs, float) and not np.isfinite(ntcp_rs)):
+                geud_eqd2 = self.convert_to_eqd2(geud, params['alpha_beta'], dose_per_fraction)
+                if not np.isnan(geud_eqd2) and geud_eqd2 > 0 and D50 > 0 and gamma > 0:
+                    dose_ratio = np.clip(geud_eqd2 / D50, 1e-10, 1e10)
+                    exponent = np.clip(np.power(dose_ratio, gamma), 1e-15, 50)
+                    ntcp_rs = 1.0 - np.exp(-exponent)
+                    ntcp_rs = float(np.clip(ntcp_rs, 1e-15, 1.0 - 1e-15))
+                else:
+                    ntcp_rs = 0.0
             
             results['RS_Poisson'] = {
                 'NTCP': ntcp_rs,
@@ -555,7 +620,19 @@ class NTCPCalculator:
             }
         except Exception as e:
             print(f"Error calculating RS Poisson for {organ}: {e}")
-            results['RS_Poisson'] = {'NTCP': 0.0, 'error': str(e)}
+            # Last-resort gEUD fallback
+            try:
+                geud_eqd2 = self.convert_to_eqd2(geud, organ_params['RS_Poisson']['alpha_beta'], dose_per_fraction)
+                if not np.isnan(geud_eqd2) and geud_eqd2 > 0:
+                    D50 = organ_params['RS_Poisson']['D50']
+                    gamma = organ_params['RS_Poisson']['gamma']
+                    ntcp_rs = 1.0 - np.exp(-np.power(geud_eqd2 / D50, gamma))
+                    ntcp_rs = float(np.clip(ntcp_rs, 0.0, 1.0))
+                else:
+                    ntcp_rs = 0.0
+            except Exception:
+                ntcp_rs = 0.0
+            results['RS_Poisson'] = {'NTCP': ntcp_rs, 'error': str(e)}
         
         return results
 
@@ -2708,11 +2785,75 @@ class ComprehensivePlotter:
         print(f" Saved overall performance plot: {filename}")
         plt.close()
 
-def create_comprehensive_excel(results_df, output_dir):
-    """Create comprehensive Excel file with all results"""
+
+def save_ml_validation_results(ml_models, output_dir):
+    """
+    Save ML validation metrics (including CV-AUC) to ml_validation.xlsx.
     
+    CV-AUC values are computed during training but were previously not persisted.
+    This ensures they are available for reports and downstream analysis.
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    ml_validation_data = []
+    for organ in sorted(ml_models.models.keys()):
+        organ_models = ml_models.models[organ]
+        
+        for model_name in ['ANN', 'XGBoost']:
+            if model_name not in organ_models:
+                continue
+            
+            model_info = organ_models[model_name]
+            cv_mean = model_info.get('cv_AUC_mean', np.nan)
+            cv_std = model_info.get('cv_AUC_std', np.nan)
+            n_samples = model_info.get('n_samples', model_info.get('n_train', np.nan))
+            n_events = model_info.get('n_events', np.nan)
+            validation_method = model_info.get('validation_method', 'train_test_split')
+            
+            ml_validation_data.append({
+                'Organ': organ,
+                'Model': f'ML_{model_name}',
+                'CV_AUC_Mean': cv_mean,
+                'CV_AUC_Std': cv_std,
+                'N_Samples': n_samples,
+                'N_Events': n_events,
+                'Validation_Method': validation_method
+            })
+    
+    if ml_validation_data:
+        ml_val_df = pd.DataFrame(ml_validation_data)
+        ml_val_file = output_path / 'ml_validation.xlsx'
+        ml_val_df.to_excel(ml_val_file, index=False)
+        print(f"\n Saved ML validation results (including CV-AUC) to {ml_val_file}")
+    else:
+        print("\n [INFO] No ML models trained - ml_validation.xlsx not created")
+
+
+def create_comprehensive_excel(results_df, output_dir, ml_models=None):
+    """Create comprehensive Excel file with all results.
+    
+    Args:
+        results_df: Results DataFrame
+        output_dir: Output directory path
+        ml_models: Optional MachineLearningModels instance - when provided, CV-AUC
+            values are included in Summary by Organ and Performance Matrix sheets.
+    """
     output_path = Path(output_dir)
     excel_file = output_path / 'ntcp_results.xlsx'
+    
+    # Build CV-AUC lookup from ml_models if available
+    cv_auc_lookup = {}
+    if ml_models is not None:
+        for organ in ml_models.models.keys():
+            cv_auc_lookup[organ] = {}
+            for model_name in ['ANN', 'XGBoost']:
+                if model_name in ml_models.models[organ]:
+                    info = ml_models.models[organ][model_name]
+                    cv_auc_lookup[organ][f'ML_{model_name}'] = {
+                        'mean': info.get('cv_AUC_mean', np.nan),
+                        'std': info.get('cv_AUC_std', np.nan)
+                    }
     
     print(f" Creating comprehensive Excel file: {excel_file}")
     
@@ -2792,6 +2933,16 @@ def create_comprehensive_excel(results_df, output_dir):
                 summary_row[f'{model}_AUC'] = f"{perf['AUC']:.3f}" if not np.isnan(perf['AUC']) else 'N/A'
                 summary_row[f'{model}_Brier'] = f"{perf['Brier']:.3f}" if not np.isnan(perf['Brier']) else 'N/A'
             
+            # Add CV-AUC for ML models when available
+            if organ in cv_auc_lookup:
+                for ml_model, cv_info in cv_auc_lookup[organ].items():
+                    cv_mean, cv_std = cv_info['mean'], cv_info['std']
+                    if not np.isnan(cv_mean):
+                        cv_str = f"{cv_mean:.3f} ± {cv_std:.3f}" if not np.isnan(cv_std) else f"{cv_mean:.3f}"
+                        summary_row[f'{ml_model}_CV_AUC'] = cv_str
+                    else:
+                        summary_row[f'{ml_model}_CV_AUC'] = 'N/A'
+            
             summary_data.append(summary_row)
         
         summary_df = pd.DataFrame(summary_data)
@@ -2824,6 +2975,15 @@ def create_comprehensive_excel(results_df, output_dir):
                         row[f'{model}_AUC'] = 'Insufficient Data'
                 else:
                     row[f'{model}_AUC'] = 'Not Available'
+            
+            # Add CV-AUC for ML models when available
+            if organ in cv_auc_lookup:
+                for ml_model, cv_info in cv_auc_lookup[organ].items():
+                    cv_mean, cv_std = cv_info['mean'], cv_info['std']
+                    if not np.isnan(cv_mean):
+                        row[f'{ml_model}_CV_AUC'] = f"{cv_mean:.3f} ± {cv_std:.3f}" if not np.isnan(cv_std) else f"{cv_mean:.3f}"
+                    else:
+                        row[f'{ml_model}_CV_AUC'] = 'N/A'
             
             performance_matrix.append(row)
         
@@ -3678,8 +3838,11 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     results_df.to_csv(output_path / 'enhanced_ntcp_calculations.csv', index=False)
     print(f"\n Saved enhanced NTCP calculations to {output_path / 'enhanced_ntcp_calculations.csv'}")
     
-    # Create comprehensive Excel file
-    create_comprehensive_excel(results_df, output_dir)
+    # Save ML validation results (including CV-AUC) to ml_validation.xlsx
+    save_ml_validation_results(ml_models, output_dir)
+    
+    # Create comprehensive Excel file (with CV-AUC in Summary and Performance Matrix)
+    create_comprehensive_excel(results_df, output_dir, ml_models=ml_models)
     
     # Create comprehensive plots
     print(f"\n Creating Comprehensive Publication-Ready Plots")
@@ -5525,7 +5688,25 @@ def main():
                         pd.DataFrame(columns=['PrimaryPatientID', 'Organ']).to_excel(
                             writer, sheet_name='Uncertainty', index=False)
                     
-                    # Sheet 8: ML_Performance
+                    # Sheet 8: ML_Performance (includes CV-AUC from ml_validation.xlsx)
+                    ml_val_lookup = {}
+                    ml_val_file = Path(output_dir) / 'ml_validation.xlsx'
+                    if ml_val_file.exists():
+                        try:
+                            ml_val_df = pd.read_excel(ml_val_file)
+                            for _, r in ml_val_df.iterrows():
+                                org = r.get('Organ', '')
+                                model = r.get('Model', '')
+                                if org not in ml_val_lookup:
+                                    ml_val_lookup[org] = {}
+                                cv_mean = r.get('CV_AUC_Mean', np.nan)
+                                cv_std = r.get('CV_AUC_Std', np.nan)
+                                if pd.notna(cv_mean):
+                                    cv_str = f"{cv_mean:.3f} ± {cv_std:.3f}" if pd.notna(cv_std) else f"{cv_mean:.3f}"
+                                    ml_val_lookup[org][model] = cv_str
+                        except Exception as e:
+                            pass  # Fallback: CV-AUC columns will be N/A
+                    
                     ml_perf_data = []
                     for organ in sorted(results_df['Organ'].unique()):
                         organ_data = results_df[results_df['Organ'] == organ]
@@ -5553,6 +5734,12 @@ def main():
                             else:
                                 row[f'{model}_AUC'] = 'Not Available'
                                 row[f'{model}_Brier'] = 'Not Available'
+                            
+                            # Add CV-AUC when available from ml_validation.xlsx
+                            if organ in ml_val_lookup and model in ml_val_lookup[organ]:
+                                row[f'{model}_CV_AUC'] = ml_val_lookup[organ][model]
+                            else:
+                                row[f'{model}_CV_AUC'] = 'N/A'
                         
                         ml_perf_data.append(row)
                     

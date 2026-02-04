@@ -1,13 +1,30 @@
-numpy
-pandas
-matplotlib
+# Core
+numpy>=1.20.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# ML & validation
+scikit-learn>=0.24.0
+xgboost>=1.5.0
+
+# Visualization
+matplotlib>=3.3.0
 seaborn
-scipy
-scikit-learn
-xgboost
-python-docx
+
+# Excel & reports
 openpyxl
+xlsxwriter
+python-docx
+
+# Interpretability (SHAP, LIME)
 shap
 lime
+
+# Model serialization
+joblib>=1.0.0
+
+# Optional (feature selection, alternative models)
 lightgbm
-pytest
+
+# Testing
+pytest>=6.0

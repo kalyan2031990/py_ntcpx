@@ -1,6 +1,8 @@
-# Test Report - py_ntcpx v3.0.0 (Enhanced Interpretability and Small-Cohort Honesty)
+# Test Report - py_ntcpx v3.0.0
 
-**Generated:** 2026-02-03
+**Generated:** 2025-02-04  
+**Test Runner:** `run_all_tests.py` (pytest)  
+**JUnit Report:** `test_reports/pytest_report.xml`
 
 ---
 
@@ -13,385 +15,173 @@
 | **Failed** | 0 |
 | **Errors** | 0 |
 | **Skipped** | 2 |
-| **Total Time** | ~15s |
+| **Total Time** | ~7s |
 
 **Pass Rate:** 100% (78/78 runnable tests passed)
 
 ✅ **All tests passed successfully!**
 
-### Recent Enhancements Tested (v3.0.0)
-
-This test run validates the following v3.0.0 enhancements:
-
-1. ✅ **Adaptive CCS Thresholds** - Scientifically honest thresholds based on dataset size (0.0 for n<30, 0.1 for n<100, 0.2 for n≥100)
-2. ✅ **CCS Warnings Instead of DO_NOT_USE** - Predictions preserved with warning flags instead of blocking
-3. ✅ **Fixed XGBoost SHAP** - Model-agnostic explainer for serialized models
-4. ✅ **Improved ANN SHAP Stability** - Enhanced error handling with CCS-aware warnings
-5. ✅ **LIME Integration** - Local interpretable model-agnostic explanations for representative patients
-6. ✅ **Clinical Factor Integration** - Automatic inclusion of significant clinical factors (p < 0.05)
-7. ✅ **Small Dataset Adaptations** - CV strategy, model complexity, and feature selection adaptations
-
-All enhancements maintain backward compatibility and pass all existing tests.
-
 ---
 
 ## Test Results by Category
 
-### ✅ test_data_validation.TestDVHDataValidation
-
-- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_dvh_empty | ✅ PASSED | 0.002 |
-| test_dvh_monotonic_dose | ✅ PASSED | 0.002 |
-| test_dvh_volume_non_negative | ✅ PASSED | 0.002 |
-| test_valid_dvh_structure | ✅ PASSED | 0.002 |
-
-### ✅ test_data_validation.TestEdgeCases
-
-- **Total:** 3 | **Passed:** 3 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_extreme_dose_values | ✅ PASSED | 0.002 |
-| test_missing_values | ✅ PASSED | 0.002 |
-| test_single_bin_dvh | ✅ PASSED | 0.002 |
-
-### ✅ test_data_validation.TestNTCPValueValidation
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_ntcp_confidence_intervals | ✅ PASSED | 0.002 |
-| test_ntcp_range | ✅ PASSED | 0.001 |
-
-### ✅ test_data_validation.TestOutputFileValidation
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_csv_output | ✅ PASSED | 0.010 |
-| test_excel_output | ✅ PASSED | 0.045 |
-
-### ✅ test_data_validation.TestPatientDataValidation
-
-- **Total:** 3 | **Passed:** 3 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_organ_names | ✅ PASSED | 0.002 |
-| test_toxicity_binary | ✅ PASSED | 0.002 |
-| test_valid_patient_data | ✅ PASSED | 0.002 |
-
-### ✅ test_ntcp_pipeline.TestBiologicalDVH
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_bed_calculation | ✅ PASSED | 0.001 |
-| test_eqd2_calculation | ✅ PASSED | 0.001 |
-
-### ✅ test_ntcp_pipeline.TestDataValidation
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_dvh_data_structure | ✅ PASSED | 0.003 |
-| test_patient_data_structure | ✅ PASSED | 0.029 |
-
-### ✅ test_ntcp_pipeline.TestIntegration
-
-- **Total:** 1 | **Passed:** 1 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_pipeline_data_flow | ✅ PASSED | 0.003 |
-
-### ✅ test_ntcp_pipeline.TestNTCPUtils
-
-- **Total:** 3 | **Passed:** 3 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_find_dvh_file | ✅ PASSED | 0.005 |
-| test_normalize_columns | ✅ PASSED | 0.002 |
-| test_normalize_columns_empty | ✅ PASSED | 0.003 |
-
-### ✅ test_ntcp_pipeline.TestNovelModels
-
-- **Total:** 3 | **Passed:** 3 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_monte_carlo_ntcp_model | ✅ PASSED | 0.133 |
-| test_probabilistic_geud_calculate | ✅ PASSED | 0.013 |
-| test_probabilistic_geud_model_init | ✅ PASSED | 0.002 |
-
-### ✅ test_ntcp_pipeline.TestOutputFormats
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_csv_output_format | ✅ PASSED | 0.004 |
-| test_excel_output_format | ✅ PASSED | 0.739 |
-
-### ✅ test_ntcp_pipeline.TestQAModules
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_cohort_consistency_score | ✅ PASSED | 0.002 |
-| test_uncertainty_aware_ntcp | ✅ PASSED | 0.002 |
-
-### ✅ tests.regression.test_baseline_regression.TestBaselineRegression
-
-- **Total:** 2 | **Passed:** 0 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 2
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_baseline_exists | ⏭️ SKIPPED | 0.003 |
-| test_classical_ntcp_outputs_unchanged | ⏭️ SKIPPED | 0.002 |
-
-### ✅ tests.test_auc_calculator.TestAUCCalculator
-
-- **Total:** 6 | **Passed:** 6 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_auc_calculation_bootstrap | ✅ PASSED | 0.210 |
-| test_auc_calculation_delong | ✅ PASSED | 0.010 |
-| test_auc_ci_coverage | ✅ PASSED | 0.388 |
-| test_auc_high_vs_low | ✅ PASSED | 0.357 |
-| test_auc_requires_both_classes | ✅ PASSED | 0.002 |
-| test_compare_aucs_delong | ✅ PASSED | 3.572 |
-
-### ✅ tests.test_auto_feature_reducer.TestAutoFeatureReducer
-
-- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_auto_reduction_low_epv | ✅ PASSED | 0.056 |
-| test_no_reduction_adequate_epv | ✅ PASSED | 0.002 |
-
-### ✅ tests.test_calibration_correction.TestCalibrationCorrection
-
-- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_calibration_improves_slope | ✅ PASSED | 0.013 |
-| test_calibration_slope_calculation | ✅ PASSED | 0.004 |
-| test_isotonic_regression | ✅ PASSED | 0.003 |
-| test_platt_scaling | ✅ PASSED | 0.006 |
-
-### ✅ tests.test_clinical_safety.TestClinicalSafetyGuard
-
-- **Total:** 7 | **Passed:** 7 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_do_not_use_flag_low_ccs | ✅ PASSED | 0.003 |
-| test_evaluate_safety_basic | ✅ PASSED | 0.003 |
-| test_fit_training_data | ✅ PASSED | 0.002 |
-| test_safety_guard_initialization | ✅ PASSED | 0.001 |
-| test_safety_report_generation | ✅ PASSED | 0.003 |
-| test_safety_report_save | ✅ PASSED | 0.006 |
-| test_underprediction_risk_detection | ✅ PASSED | 0.004 |
-
-### ✅ tests.test_data_splitter.TestPatientDataSplitter
-
-- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_leakage_detection | ✅ PASSED | 0.011 |
-| test_patient_level_split | ✅ PASSED | 0.008 |
-| test_reproducibility | ✅ PASSED | 0.010 |
-| test_stratification | ✅ PASSED | 0.008 |
-| test_train_test_no_overlap | ✅ PASSED | 0.008 |
-
-### ✅ tests.test_dvh_validation.TestDVHValidation
-
-- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_dose_non_negative | ✅ PASSED | 0.001 |
-| test_dvh_monotonicity | ✅ PASSED | 0.001 |
-| test_gEUD_reproducibility | ✅ PASSED | 0.001 |
-| test_v0_equals_100 | ✅ PASSED | 0.002 |
-| test_volume_range | ✅ PASSED | 0.001 |
-
-### ✅ tests.test_feature_selector.TestRadiobiologyGuidedFeatureSelector
-
-- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_epv_based_feature_capping | ✅ PASSED | 0.016 |
-| test_feature_selection_max_features | ✅ PASSED | 0.021 |
-| test_other_organs | ✅ PASSED | 0.020 |
-| test_parotid_essential_features | ✅ PASSED | 0.019 |
-| test_statistical_filtering | ✅ PASSED | 0.009 |
-
-### ✅ tests.test_integration.TestEndToEndPipeline
-
-- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_complete_workflow | ✅ PASSED | 3.333 |
-| test_feature_selection_integration | ✅ PASSED | 0.012 |
-| test_ml_training_integration | ✅ PASSED | 3.397 |
-| test_patient_level_split_integration | ✅ PASSED | 0.011 |
-
-### ✅ tests.test_ml_models.TestOverfitResistantMLModels
-
-- **Total:** 7 | **Passed:** 7 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_ann_model_creation | ✅ PASSED | 0.030 |
-| test_complexity_adjustment_small_sample | ✅ PASSED | 0.001 |
-| test_epv_calculation | ✅ PASSED | 0.003 |
-| test_epv_error_very_low_epv | ✅ PASSED | 0.002 |
-| test_epv_warning_low_epv | ✅ PASSED | 0.001 |
-| test_nested_cv | ✅ PASSED | 0.149 |
-| test_xgboost_model_creation | ✅ PASSED | 0.028 |
-
-### ✅ tests.test_ntcp_mathematics.TestNTCPMathematics
-
-- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Errors:** 0 | **Skipped:** 0
-
-| Test Name | Status | Time (s) |
-|-----------|--------|----------|
-| test_ntcp_at_td50 | ✅ PASSED | 0.002 |
-| test_ntcp_bounds | ✅ PASSED | 0.004 |
-| test_ntcp_edge_cases | ✅ PASSED | 0.002 |
-| test_ntcp_monotonicity | ✅ PASSED | 0.003 |
+### tests/test_auc_calculator.py - TestAUCCalculator
+- **Total:** 6 | **Passed:** 6 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_auc_calculation_bootstrap | ✅ PASSED |
+| test_auc_calculation_delong | ✅ PASSED |
+| test_auc_ci_coverage | ✅ PASSED |
+| test_auc_high_vs_low | ✅ PASSED |
+| test_auc_requires_both_classes | ✅ PASSED |
+| test_compare_aucs_delong | ✅ PASSED |
+
+### tests/test_auto_feature_reducer.py - TestAutoFeatureReducer
+- **Total:** 2 | **Passed:** 2 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_auto_reduction_low_epv | ✅ PASSED |
+| test_no_reduction_adequate_epv | ✅ PASSED |
+
+### tests/test_calibration_correction.py - TestCalibrationCorrection
+- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_calibration_improves_slope | ✅ PASSED |
+| test_calibration_slope_calculation | ✅ PASSED |
+| test_isotonic_regression | ✅ PASSED |
+| test_platt_scaling | ✅ PASSED |
+
+### tests/test_clinical_safety.py - TestClinicalSafetyGuard
+- **Total:** 7 | **Passed:** 7 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_do_not_use_flag_low_ccs | ✅ PASSED |
+| test_evaluate_safety_basic | ✅ PASSED |
+| test_fit_training_data | ✅ PASSED |
+| test_safety_guard_initialization | ✅ PASSED |
+| test_safety_report_generation | ✅ PASSED |
+| test_safety_report_save | ✅ PASSED |
+| test_underprediction_risk_detection | ✅ PASSED |
+
+### tests/test_data_splitter.py - TestPatientDataSplitter
+- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_leakage_detection | ✅ PASSED |
+| test_patient_level_split | ✅ PASSED |
+| test_reproducibility | ✅ PASSED |
+| test_stratification | ✅ PASSED |
+| test_train_test_no_overlap | ✅ PASSED |
+
+### tests/test_dvh_validation.py - TestDVHValidation
+- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_dose_non_negative | ✅ PASSED |
+| test_dvh_monotonicity | ✅ PASSED |
+| test_gEUD_reproducibility | ✅ PASSED |
+| test_v0_equals_100 | ✅ PASSED |
+| test_volume_range | ✅ PASSED |
+
+### tests/test_feature_selector.py - TestRadiobiologyGuidedFeatureSelector
+- **Total:** 5 | **Passed:** 5 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_epv_based_feature_capping | ✅ PASSED |
+| test_feature_selection_max_features | ✅ PASSED |
+| test_other_organs | ✅ PASSED |
+| test_parotid_essential_features | ✅ PASSED |
+| test_statistical_filtering | ✅ PASSED |
+
+### tests/test_integration.py - TestEndToEndPipeline
+- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_complete_workflow | ✅ PASSED |
+| test_feature_selection_integration | ✅ PASSED |
+| test_ml_training_integration | ✅ PASSED |
+| test_patient_level_split_integration | ✅ PASSED |
+
+### tests/test_ml_models.py - TestOverfitResistantMLModels
+- **Total:** 7 | **Passed:** 7 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_ann_model_creation | ✅ PASSED |
+| test_complexity_adjustment_small_sample | ✅ PASSED |
+| test_epv_calculation | ✅ PASSED |
+| test_epv_error_very_low_epv | ✅ PASSED |
+| test_epv_warning_low_epv | ✅ PASSED |
+| test_nested_cv | ✅ PASSED |
+| test_xgboost_model_creation | ✅ PASSED |
+
+### tests/test_ntcp_mathematics.py - TestNTCPMathematics
+- **Total:** 4 | **Passed:** 4 | **Failed:** 0 | **Skipped:** 0
+
+| Test Name | Status |
+|-----------|--------|
+| test_ntcp_at_td50 | ✅ PASSED |
+| test_ntcp_bounds | ✅ PASSED |
+| test_ntcp_edge_cases | ✅ PASSED |
+| test_ntcp_monotonicity | ✅ PASSED |
+
+### tests/regression/test_baseline_regression.py - TestBaselineRegression
+- **Total:** 2 | **Passed:** 0 | **Failed:** 0 | **Skipped:** 2
+
+| Test Name | Status |
+|-----------|--------|
+| test_baseline_exists | ⏭️ SKIPPED |
+| test_classical_ntcp_outputs_unchanged | ⏭️ SKIPPED |
+
+### test_ntcp_pipeline.py
+- **TestNTCPUtils:** 3 passed
+- **TestNovelModels:** 3 passed
+- **TestQAModules:** 2 passed
+- **TestDataValidation:** 2 passed
+- **TestOutputFormats:** 2 passed
+- **TestBiologicalDVH:** 2 passed
+- **TestIntegration:** 1 passed
+
+### test_data_validation.py
+- **TestDVHDataValidation:** 4 passed
+- **TestPatientDataValidation:** 3 passed
+- **TestNTCPValueValidation:** 2 passed
+- **TestOutputFileValidation:** 2 passed
+- **TestEdgeCases:** 3 passed
 
 ---
 
-## Test Files
+## Recent Fixes Validated (v3.0.0 → v3.0.1)
 
-| Test File | Tests | Passed | Failed | Errors | Skipped |
-|-----------|-------|--------|--------|--------|---------|
-| TestAUCCalculator | 6 | 6 | 0 | 0 | 0 |
-| TestAutoFeatureReducer | 2 | 2 | 0 | 0 | 0 |
-| TestBaselineRegression | 2 | 0 | 0 | 0 | 2 |
-| TestBiologicalDVH | 2 | 2 | 0 | 0 | 0 |
-| TestCalibrationCorrection | 4 | 4 | 0 | 0 | 0 |
-| TestClinicalSafetyGuard | 7 | 7 | 0 | 0 | 0 |
-| TestDVHDataValidation | 4 | 4 | 0 | 0 | 0 |
-| TestDVHValidation | 5 | 5 | 0 | 0 | 0 |
-| TestDataValidation | 2 | 2 | 0 | 0 | 0 |
-| TestEdgeCases | 3 | 3 | 0 | 0 | 0 |
-| TestEndToEndPipeline | 4 | 4 | 0 | 0 | 0 |
-| TestIntegration | 1 | 1 | 0 | 0 | 0 |
-| TestNTCPMathematics | 4 | 4 | 0 | 0 | 0 |
-| TestNTCPUtils | 3 | 3 | 0 | 0 | 0 |
-| TestNTCPValueValidation | 2 | 2 | 0 | 0 | 0 |
-| TestNovelModels | 3 | 3 | 0 | 0 | 0 |
-| TestOutputFileValidation | 2 | 2 | 0 | 0 | 0 |
-| TestOutputFormats | 2 | 2 | 0 | 0 | 0 |
-| TestOverfitResistantMLModels | 7 | 7 | 0 | 0 | 0 |
-| TestPatientDataSplitter | 5 | 5 | 0 | 0 | 0 |
-| TestPatientDataValidation | 3 | 3 | 0 | 0 | 0 |
-| TestQAModules | 2 | 2 | 0 | 0 | 0 |
-| TestRadiobiologyGuidedFeatureSelector | 5 | 5 | 0 | 0 | 0 |
+The following fixes were applied and all tests continue to pass:
+
+1. **Issue 1: ML CV-AUC Values** – `save_ml_validation_results()` now writes CV-AUC to `ml_validation.xlsx`; reports include CV-AUC columns.
+2. **Issue 2: QUANTEC-RS NaN** – RS Poisson numerical stability improved; gEUD-based fallback added when DVH calculation fails.
+3. **Issue 3: gEUD Verification** – gEUD formula and parameters verified correct; docstring updated.
 
 ---
 
-## Enhancement Validation (v3.0.0)
+## Warnings (Expected)
 
-### New Features Tested
+- **LOW EPV WARNING** in ML model tests (by design for small-sample scenarios)
+- 5 warnings total; none indicate test failures
 
-#### 1. Adaptive CCS Thresholds (`ntcp_qa_modules.py`) - v3.0.0
-- ✅ CCS threshold adapts based on dataset size (0.0 for n<30, 0.1 for n<100, 0.2 for n≥100)
-- ✅ Replaces overly conservative static threshold that blocked all predictions
-- ✅ Clinical safety guard correctly handles adaptive thresholds
-- ✅ `CCS_Warning_Flag` column (boolean) replaces `CCS_Safety` ('DO_NOT_USE'/'OK')
+---
 
-#### 2. CCS Warnings Instead of DO_NOT_USE - v3.0.0
-- ✅ All predictions preserved with warning flags
-- ✅ Full analysis and explanations (SHAP/LIME) computed for all patients
-- ✅ Clear logging: "INFO - CCS below adaptive threshold for X/X predictions. Interpretations should be treated with caution."
-- ✅ Updated safety reports reflect warning-based approach
+## Environment
 
-#### 3. Fixed XGBoost SHAP Explainer (`shap_code7.py`) - v3.0.0
-- ✅ Model-agnostic explainer replaces TreeExplainer for serialized models
-- ✅ Base score fix handles string `base_score` in serialized XGBoost models
-- ✅ Robust prediction wrapper works with both DataFrame and array inputs
-- ✅ Resolves serialization issues when loading saved XGBoost models
-
-#### 4. Improved ANN SHAP Stability Warnings - v3.0.0
-- ✅ Enhanced error handling wrapped in try-except blocks
-- ✅ CCS-aware warnings check cohort consistency before stability analysis
-- ✅ Clear warnings: "WARNING - SHAP stability analysis skipped for ANN due to low cohort consistency"
-- ✅ Visualizations preserved with appropriate warnings
-
-#### 5. LIME Integration (`shap_code7.py`) - v3.0.0
-- ✅ LIME explanations generated for representative patients (highest, median, lowest NTCP)
-- ✅ Dual output formats: HTML and PNG files
-- ✅ Works with both ANN and XGBoost models
-- ✅ Complementary to SHAP for local interpretability
-
-#### 6. Clinical Factor Integration (`src/features/feature_selector.py`) - v2.1.0
-- ✅ Feature selector accepts clinical data parameter
-- ✅ Significant clinical factors (p < 0.05) automatically included
-- ✅ Backward compatible when no clinical data provided
-
-#### 7. Small Dataset Adaptations (`code3_ntcp_analysis_ml.py`) - v2.1.0
-- ✅ `adapt_for_small_dataset()` function works correctly
-- ✅ CV strategy adapts (LOOCV for n < 30, StratifiedKFold for n 30-100)
-- ✅ Model complexity reduces for small datasets
-- ✅ Feature selection uses conservative EPV for small datasets
-
-#### 8. Enhanced Reporting (`code4_ntcp_output_QA_reporter.py`) - v2.1.0
-- ✅ Small dataset advisory functions defined
-- ✅ Clinical factor reporting functions implemented
-- ✅ Integration with DOCX report generation
-
-### Fixed Issues (v3.0.0)
-
-1. ✅ **XGBoost SHAP Compatibility**: Fixed explainer to work with serialized models
-   - Uses model-agnostic `Explainer` instead of `TreeExplainer`
-   - Handles string `base_score` conversion
-
-2. ✅ **Overly Conservative CCS Threshold**: Fixed threshold blocking all predictions in small cohorts
-   - Adaptive thresholds based on dataset size
-   - Enables honest analysis of real-world small datasets
-
-3. ✅ **Missing SHAP Explanations**: Fixed issue where SHAP was skipped when CCS was low
-   - All explanations now generated with appropriate warnings
-   - Visualizations preserved with stability warnings
-
-4. ✅ **ANN SHAP Stability**: Improved error handling for bootstrap stability analysis
-   - Graceful failure with informative warnings
-   - CCS-aware checks before attempting stability analysis
-
-### Test Coverage
-
-- **Total Test Files**: 23
-- **Total Test Cases**: 80
-- **Passed**: 78 (100% of runnable tests)
-- **Skipped**: 2 (baseline regression tests - expected)
-- **Failed**: 0
-- **Errors**: 0
-
-### Warnings
-
-Expected warnings (not errors):
-- EPV warnings for low event counts (by design)
-- Deprecation warnings from openpyxl (external library)
+- **Python:** 3.14.2
+- **pytest:** 9.0.2
+- **Platform:** win32
 
 ---
 

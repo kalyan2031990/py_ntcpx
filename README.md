@@ -7,6 +7,7 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
 | Version | Status | Branch/Tag |
 |---------|--------|------------|
 | **v3.0.0** | **Default public version** (Latest) | `main` |
+| v3.0.1 | Patch fixes (ML CV-AUC, QUANTEC-RS, gEUD) | Included in `main`; see [FIXES_v3.0.0_to_v3.0.1.md](FIXES_v3.0.0_to_v3.0.1.md) |
 | **v2.1.0** | Previous stable release | `v2.1.0` tag |
 | **v2.0.0** | Previous stable release | `v2.0.0` tag |
 | v1.2.1 | Archived, legacy-stable | `v1.2.1` tag |
@@ -36,7 +37,8 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
    ```
 4. Run tests:
    ```bash
-   pytest -q
+   python run_all_tests.py
+   # or: pytest -q
    ```
 5. Run pipeline (DVH text directory and patient Excel required):
    ```bash
@@ -55,6 +57,12 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
 | `archive/` | ARCHIVED — non-canonical release scripts (v1.0.0, v1.1.0) for reproducibility only |
 | `requirements.txt`, `pyproject.toml` | Dependencies and tooling |
 | `CITATION.cff`, `LICENSE` | Citation and license |
+
+## Key outputs (code3)
+
+- `ntcp_results.xlsx` — NTCP predictions, Summary by Organ, Performance Matrix (incl. ML CV-AUC)
+- `ml_validation.xlsx` — ML validation metrics (CV-AUC for ANN, XGBoost)
+- `manuscript_materials/` — Publication-ready figures and tables
 
 ## CI and maintenance
 

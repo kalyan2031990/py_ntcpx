@@ -1,7 +1,7 @@
 # py_ntcpx v3.0.0 - Complete Output Structure and Information
 
-**Version**: 3.0.0  
-**Date**: February 2026
+**Version**: 3.0.0 (v3.0.1 fixes applied)  
+**Date**: February 2025
 
 ---
 
@@ -61,7 +61,8 @@ out2/
 │   ├── clinical_factors_analysis/     # Clinical factors analysis
 │   ├── quantec_validation/           # QUANTEC validation
 │   ├── manuscript_materials/         # Manuscript figures
-│   ├── ntcp_results.xlsx             # Main results
+│   ├── ntcp_results.xlsx             # Main results (incl. ML CV-AUC in Summary/Performance)
+│   ├── ml_validation.xlsx            # ML validation metrics (CV-AUC for ANN, XGBoost) [v3.0.1]
 │   ├── enhanced_ntcp_calculations.csv
 │   ├── enhanced_summary_performance.csv
 │   ├── local_biological_parameters.json
@@ -205,10 +206,16 @@ out2/
 
 - `ntcp_results.xlsx`: **Primary output file**
   - All model predictions (classical + ML)
+  - Summary by Organ and Performance Matrix (incl. ML CV-AUC columns, v3.0.1)
   - Individual patient predictions
   - CCS scores and `CCS_Warning_Flag` (v3.0.0)
   - Uncertainty quantification (uNTCP, CI)
   - Feature values used for predictions
+
+- `ml_validation.xlsx`: **ML validation metrics** (v3.0.1)
+  - CV_AUC_Mean, CV_AUC_Std for ANN and XGBoost per organ
+  - N_Samples, N_Events, Validation_Method
+  - Used by reports and manuscript materials
 
 - `enhanced_ntcp_calculations.csv`: Detailed NTCP calculations (CSV format)
 
@@ -691,5 +698,6 @@ ntcp = model.predict_proba(X_scaled)[0, 1]
 ---
 
 **Document Version**: 3.0.0  
-**Last Updated**: February 2026
+**Last Updated**: February 2026  
+**Pipeline Run**: 2026-02-04 (input_txtdvh, corrected_dataset2.xlsx)
 

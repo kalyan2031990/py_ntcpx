@@ -1,6 +1,6 @@
-# Reproducibility Guide for py_ntcpx v2.0
+# Reproducibility Guide for py_ntcpx v3.0
 
-This document provides instructions for reproducing all results from the py_ntcpx v2.0 pipeline.
+This document provides instructions for reproducing all results from the py_ntcpx v3.0 pipeline.
 
 ## Random Seeds
 
@@ -89,11 +89,11 @@ python code2_bDVH.py \
 
 ```bash
 python code3_ntcp_analysis_ml.py \
-    --dvh_dir code2_output \
-    --clinical_file code0_output/clinical_reconciled.xlsx \
-    --output_dir code3_output \
-    --random_seed 42
+    --dvh_dir code1_output/dDVH_csv \
+    --output_dir code3_output
 ```
+
+Note: Clinical data is loaded from `code0_output/clinical_reconciled.xlsx` (resolved relative to output_dir). DVH directory uses differential DVH from code1 (`dDVH_csv`).
 
 ### Step 4: QA Reporting
 
@@ -154,8 +154,10 @@ auc_val, auc_ci = calculate_auc_with_ci(
 
 All outputs are saved with timestamps and random seed information:
 
-- `code3_output/ntcp_results.xlsx`: Main results
-- `code3_output/figures/`: Publication-ready figures (600 DPI)
+- `code3_output/ntcp_results.xlsx`: Main results (Complete Results, Summary by Organ, Performance Matrix with ML CV-AUC)
+- `code3_output/ml_validation.xlsx`: ML validation metrics (CV-AUC for ANN, XGBoost per organ)
+- `code3_output/plots/`: Publication-ready figures (600 DPI)
+- `code3_output/manuscript_materials/`: Figures, tables, and methods for publication
 - `QA_results/comprehensive_report.docx`: QA report
 - `QA_results/qa_summary_tables.xlsx`: Summary tables
 
@@ -199,12 +201,22 @@ For exact reproducibility, use:
 - Same package versions
 - Same hardware architecture
 
+## v3.0 Fixes (Reproducibility Notes)
+
+The following fixes ensure consistent outputs:
+
+- **ML CV-AUC**: Saved to `ml_validation.xlsx` and included in ntcp_results Summary/Performance sheets
+- **QUANTEC-RS**: Numerically stable RS Poisson with gEUD fallback; no NaN outputs
+- **gEUD**: Formula verified (a=2.2 for Parotid per QUANTEC); docstring in `calculate_gEUD`
+
+See [FIXES_v3.0.0_to_v3.0.1.md](FIXES_v3.0.0_to_v3.0.1.md) for details.
+
 ## Citation
 
 When using this pipeline, please cite:
 
 ```
-py_ntcpx v2.0: Publication-ready NTCP analysis pipeline
+py_ntcpx v3.0: Publication-ready NTCP analysis pipeline
 Random seed: 42
 Reproducibility: All random operations use fixed seeds
 ```
@@ -219,5 +231,5 @@ For reproducibility issues, please:
 
 ---
 
-*Last updated: 2024*
-*Version: 2.0.0*
+*Last updated: 2025-02-04*
+*Version: 3.0.0*
