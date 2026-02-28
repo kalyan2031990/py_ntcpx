@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments (never commit - can be 500MB+)
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+.DS_Store?
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Output directories
+processed_DVH/
+analysis_out/
+QA_results/
+clinical_factors_analysis/
+out2/
+output/
+*.zip
+
+# Test outputs
+test_reports/
+*.log
+
+# Contracts (generated)
+contracts/
+
+# NTCP temporary artifacts
+*.tmp
+*.cache
+
+# Packaging scripts
+create_apk.ps1
+
+# APK / build artifacts
+bin/
+
+# Cursor / local dev
+.cursor/
+mcps/
+terminals/
+*.env
+.env.*
+!.env.example
+
+# Development/backup files (not for production)
+*_backup.py
+*_v1.2.1.py
+*_v2.0.0.py
+extract_*.py
+generate_report.py
+test_cv_approaches.py
+test_feature_fix.py
+*.diff
+ml_code_comparison.diff
+
+# Development documentation (internal use only)
+STEP1_*.md
+STEP2_*.md
+STEP3_*.md
+STEP4_*.md
+STEP5_*.md
+FIXES_AND_IMPROVEMENTS.md
+GIT_*.md
+GITHUB_*.md
+*_COMPLETE_RESULTS_REPORT.md
+CLEANUP_*.md
+RELEASE_NOTES_*_CLEAN.md
+
+# Log files (already covered by *.log but explicit)
+full_pipeline_run.log
+pipeline_with_fixes.log
+execution_log.md
+test_output.txt

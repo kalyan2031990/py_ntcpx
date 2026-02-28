@@ -1,0 +1,71 @@
+{
+  "Parotid": [
+    {
+      "label": "<20Gy",
+      "condition": "mean_dose < 20",
+      "description": "Low dose (< 20 Gy mean dose)"
+    },
+    {
+      "label": "20-30Gy",
+      "condition": "mean_dose >= 20 and mean_dose < 30",
+      "description": "Moderate dose (20-30 Gy mean dose)"
+    },
+    {
+      "label": ">30Gy",
+      "condition": "mean_dose >= 30",
+      "description": "High dose (>= 30 Gy mean dose)"
+    }
+  ],
+  "SpinalCord": [
+    {
+      "label": "<45Gy",
+      "condition": "max_dose < 45",
+      "description": "Safe dose (< 45 Gy max dose)"
+    },
+    {
+      "label": "45-50Gy",
+      "condition": "max_dose >= 45 and max_dose < 50",
+      "description": "Moderate risk (45-50 Gy max dose)"
+    },
+    {
+      "label": ">50Gy",
+      "condition": "max_dose >= 50",
+      "description": "High risk (>= 50 Gy max dose)"
+    }
+  ],
+  "Larynx": [
+    {
+      "label": "<40Gy",
+      "condition": "mean_dose < 40",
+      "description": "Low dose (< 40 Gy mean dose)"
+    },
+    {
+      "label": "40-50Gy",
+      "condition": "mean_dose >= 40 and mean_dose < 50",
+      "description": "Moderate dose (40-50 Gy mean dose)"
+    },
+    {
+      "label": ">50Gy",
+      "condition": "mean_dose >= 50",
+      "description": "High dose (>= 50 Gy mean dose)"
+    }
+  ],
+  "OralCavity": [
+    {
+      "label": "<35Gy",
+      "condition": "mean_dose < 35",
+      "description": "Low dose (< 35 Gy mean dose)"
+    },
+    {
+      "label": "35-45Gy",
+      "condition": "mean_dose >= 35 and mean_dose < 45",
+      "description": "Moderate dose (35-45 Gy mean dose)"
+    },
+    {
+      "label": ">45Gy",
+      "condition": "mean_dose >= 45",
+      "description": "High dose (>= 45 Gy mean dose)"
+    }
+  ]
+}
+

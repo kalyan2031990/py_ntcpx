@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "py_ntcpx_v1.0.0 – NTCP Analysis and Machine Learning Pipeline"
+version: "1.0.0"
+date-released: "2026-02-27"
+authors:
+  - family-names: "Mondal"
+    given-names: "K."
+    affiliation: "North Bengal Medical College, Darjeeling, India."
+license: "MIT"
+repository-code: "https://github.com/kalyan2031990/py_ntcpx_v1.0.0"
+url: "https://github.com/kalyan2031990/py_ntcpx_v1.0.0"
+keywords:
+  - NTCP
+  - Radiotherapy
+  - DVH
+  - LKB
+  - Relative Seriality
+  - Machine Learning
+

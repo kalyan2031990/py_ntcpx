@@ -1,0 +1,37 @@
+{
+  "dvH_features": [
+    "mean_dose",
+    "max_dose",
+    "min_dose",
+    "D95",
+    "D90",
+    "D70",
+    "D50",
+    "D20",
+    "D10",
+    "V70",
+    "V65",
+    "V60",
+    "V50",
+    "V45",
+    "V35",
+    "V30",
+    "V25",
+    "V20",
+    "V15",
+    "V10",
+    "gEUD",
+    "v_effective",
+    "total_volume"
+  ],
+  "ntcp_uncertainty_features": [
+    "ProbNTCP_Mean",
+    "MC_NTCP_Mean",
+    "NTCP_Probabilistic_gEUD_std",
+    "NTCP_MonteCarlo_std",
+    "NTCP_Probabilistic_gEUD_ci_lower",
+    "NTCP_MonteCarlo_ci_lower",
+    "uNTCP_CI_L",
+    "uNTCP_CI_U"
+  ]
+}

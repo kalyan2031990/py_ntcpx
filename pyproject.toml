@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# Exclude archive/ (non-canonical scripts); only canonical py_ntcpx is installable.
+exclude = ["archive*"]
+
+[project]
+name = "py_ntcpx"
+version = "3.0.0"
+description = "NTCP analysis and ML pipeline for head & neck cancer"
+authors = [{name = "kalyan2031990"}]
+readme = "README.md"
+license = {text = "See LICENSE"}
+requires-python = ">=3.9"
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "W", "C90", "I"]
