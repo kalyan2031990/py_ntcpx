@@ -151,9 +151,9 @@ class TestOverfitResistantMLModels(unittest.TestCase):
             random_seed=42
         )
         
-        # Check that hidden layers were reduced
+        # Check that hidden layers were reduced; XGBoost max_depth=2 (was 1) to avoid constant predictions
         self.assertEqual(ml_model.ANN_CONFIG['hidden_layer_sizes'], (8,))
-        self.assertEqual(ml_model.XGBOOST_CONFIG['max_depth'], 1)
+        self.assertEqual(ml_model.XGBOOST_CONFIG['max_depth'], 2)
         self.assertEqual(ml_model.XGBOOST_CONFIG['n_estimators'], 30)
     
     def test_nested_cv(self):

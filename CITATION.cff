@@ -7,9 +7,10 @@ authors:
   - family-names: "Mondal"
     given-names: "K."
     affiliation: "North Bengal Medical College, Darjeeling, India."
+    role: "Medical Physicist"
 license: "MIT"
-repository-code: "https://github.com/kalyan2031990/py_ntcpx_v1.0.0"
-url: "https://github.com/kalyan2031990/py_ntcpx_v1.0.0"
+repository-code: "https://github.com/kalyan2031990/py_ntcpx"
+url: "https://github.com/kalyan2031990/py_ntcpx"
 keywords:
   - NTCP
   - Radiotherapy

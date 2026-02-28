@@ -729,15 +729,16 @@ class MachineLearningModels:
             return None
         
         try:
-            # Conservative XGBoost parameters to prevent overfitting
+            # Conservative XGBoost parameters to prevent overfitting; allow learning on small n
             xgb_model = xgb.XGBClassifier(
-                n_estimators=50,  # Small number of trees
-                max_depth=3,      # Shallow trees
-                learning_rate=0.1,
+                n_estimators=50,
+                max_depth=2,       # Shallow but non-constant (depth 1 often collapses)
+                learning_rate=0.05,
                 subsample=0.8,
                 colsample_bytree=0.8,
-                reg_alpha=0.1,    # L1 regularization
-                reg_lambda=1.0,   # L2 regularization
+                reg_alpha=0.1,
+                reg_lambda=1.0,
+                min_child_weight=2,  # Allow splits on small data (was implicit default)
                 random_state=self.random_state,
                 eval_metric='logloss'
             )
@@ -1611,10 +1612,6 @@ class ComprehensivePlotter:
                 ml_models.append(('ML_XGBoost', ml_col, 'XGBoost'))
             elif 'RandomForest' in ml_col:
                 ml_models.append(('ML_RandomForest', ml_col, 'Random Forest'))
-            elif 'RandomForest' in ml_col:
-                ml_models.append(('ML_RandomForest', ml_col, 'Random Forest'))
-            elif 'RandomForest' in ml_col:
-                ml_models.append(('ML_RandomForest', ml_col, 'Random Forest'))
         
         all_auc_values = []
         
@@ -1725,6 +1722,8 @@ class ComprehensivePlotter:
                 ml_models.append(('ML_ANN', ml_col, 'ANN'))
             elif 'XGBoost' in ml_col:
                 ml_models.append(('ML_XGBoost', ml_col, 'XGBoost'))
+            elif 'RandomForest' in ml_col:
+                ml_models.append(('ML_RandomForest', ml_col, 'Random Forest'))
         
         calibration_metrics = {}
         
@@ -1880,6 +1879,8 @@ class ComprehensivePlotter:
                 ml_models.append(('ML_ANN', ml_col, 'ANN'))
             elif 'XGBoost' in ml_col:
                 ml_models.append(('ML_XGBoost', ml_col, 'XGBoost'))
+            elif 'RandomForest' in ml_col:
+                ml_models.append(('ML_RandomForest', ml_col, 'Random Forest'))
         
         # ROC Plot (left)
         all_auc_values = []
@@ -2321,8 +2322,11 @@ class ComprehensivePlotter:
             # Best AUC
             best_auc = 0
             best_model = 'N/A'
-            
-            for model in ['LKB_LogLogit', 'LKB_Probit', 'RS_Poisson', 'ML_ANN', 'ML_XGBoost']:
+            model_display_names = {
+                'LKB_LogLogit': 'LKB Log-logit', 'LKB_Probit': 'LKB Probit', 'RS_Poisson': 'RS Poisson',
+                'ML_ANN': 'ANN', 'ML_XGBoost': 'XGBoost', 'ML_RandomForest': 'Random Forest'
+            }
+            for model in ['LKB_LogLogit', 'LKB_Probit', 'RS_Poisson', 'ML_ANN', 'ML_XGBoost', 'ML_RandomForest']:
                 ntcp_col = f'NTCP_{model}'
                 if ntcp_col in organ_data.columns:
                     valid_data = organ_data.dropna(subset=[ntcp_col, 'Observed_Toxicity'])
@@ -2334,7 +2338,7 @@ class ComprehensivePlotter:
                             auc_score = auc(fpr, tpr)
                             if auc_score > best_auc:
                                 best_auc = auc_score
-                                best_model = model.replace('_', ' ')
+                                best_model = model_display_names.get(model, model.replace('_', ' '))
                         except:
                             pass
             
@@ -2786,9 +2790,12 @@ class ComprehensivePlotter:
         # Best performing models
         best_overall_auc = np.nanmax(auc_matrix)
         best_indices = np.where(auc_matrix == best_overall_auc)
+        _disp = {'LKB_LogLogit': 'LKB Log-logit', 'LKB_Probit': 'LKB Probit', 'RS_Poisson': 'RS Poisson',
+                 'ML_ANN': 'ANN', 'ML_XGBoost': 'XGBoost', 'ML_RandomForest': 'Random Forest'}
         if len(best_indices[0]) > 0:
             best_organ = organs[best_indices[0][0]]
-            best_model = models[best_indices[1][0]]
+            best_model_key = models[best_indices[1][0]]
+            best_model = _disp.get(best_model_key, best_model_key.replace('_', ' '))
         else:
             best_organ = 'N/A'
             best_model = 'N/A'
@@ -2895,10 +2902,12 @@ def create_comprehensive_excel(results_df, output_dir):
             # Find best model
             best_auc = 0
             best_model = 'N/A'
+            _display_names = {'LKB_LogLogit': 'LKB Log-logit', 'LKB_Probit': 'LKB Probit', 'RS_Poisson': 'RS Poisson',
+                             'ML_ANN': 'ANN', 'ML_XGBoost': 'XGBoost', 'ML_RandomForest': 'Random Forest'}
             for model, perf in model_performance.items():
                 if not np.isnan(perf['AUC']) and perf['AUC'] > best_auc:
                     best_auc = perf['AUC']
-                    best_model = model.replace('_', ' ')
+                    best_model = _display_names.get(model, model.replace('_', ' '))
             
             summary_row = {
                 'Organ': organ,
@@ -3783,6 +3792,52 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     # Create comprehensive Excel file
     create_comprehensive_excel(results_df, output_dir)
     
+    # Export ML CV metrics (CV_AUC, Test_AUC, Apparent_AUC) for tiered/QA use
+    try:
+        from sklearn.metrics import roc_curve, auc
+        cv_rows = []
+        model_to_col = {'ANN': 'NTCP_ML_ANN', 'XGBoost': 'NTCP_ML_XGBoost', 'RandomForest': 'NTCP_ML_RandomForest'}
+        for organ in sorted(ml_models.models.keys()):
+            organ_models = ml_models.models[organ]
+            organ_data = results_df[results_df['Organ'] == organ]
+            y_true = organ_data['Observed_Toxicity'].values.astype(int)
+            for model_name, pred_col in model_to_col.items():
+                if model_name not in organ_models or pred_col not in results_df.columns:
+                    continue
+                info = organ_models[model_name]
+                cv_mean = info.get('cv_AUC_mean')
+                cv_std = info.get('cv_AUC_std')
+                test_auc = info.get('test_AUC')
+                if test_auc is None and cv_mean is not None:
+                    test_auc = cv_mean  # CV path: use mean fold test AUC as Test_AUC
+                y_pred = organ_data[pred_col].values
+                valid = ~np.isnan(y_pred)
+                if valid.sum() < 5:
+                    continue
+                y_pred_valid = y_pred[valid]
+                n_unique = len(np.unique(y_pred_valid))
+                constant_predictor = (n_unique == 1)
+                if constant_predictor:
+                    print(f"\n[ML CV] WARNING: {model_name} ({organ}) has constant predictions (single value). AUC is uninformative.")
+                fpr, tpr, _ = roc_curve(y_true[valid], y_pred_valid)
+                apparent_auc = auc(fpr, tpr)
+                cv_rows.append({
+                    'Organ': organ,
+                    'Model': model_name,
+                    'Apparent_AUC': apparent_auc,
+                    'CV_AUC_mean': cv_mean,
+                    'CV_AUC_std': cv_std,
+                    'Test_AUC': test_auc,
+                    'Constant_Predictor': constant_predictor
+                })
+        if cv_rows:
+            cv_df = pd.DataFrame(cv_rows)
+            cv_path = output_path / 'ml_cv_metrics.xlsx'
+            cv_df.to_excel(cv_path, index=False)
+            print(f"\n[ML CV] Saved CV metrics to {cv_path}")
+    except Exception as e:
+        print(f"\n[ML CV] Warning: Could not export ml_cv_metrics.xlsx: {e}")
+    
     # Create comprehensive plots
     print(f"\n Creating Comprehensive Publication-Ready Plots")
     print("=" * 55)
@@ -4328,6 +4383,7 @@ def main():
                     ntcp_rs_pred = organ_data_valid['NTCP_RS_Poisson'].values if 'NTCP_RS_Poisson' in organ_data_valid.columns else np.array([])
                     ntcp_ann_pred = organ_data_valid['NTCP_ML_ANN'].values if 'NTCP_ML_ANN' in organ_data_valid.columns else np.array([])
                     ntcp_xgb_pred = organ_data_valid['NTCP_ML_XGBoost'].values if 'NTCP_ML_XGBoost' in organ_data_valid.columns else np.array([])
+                    ntcp_rf_pred = organ_data_valid['NTCP_ML_RandomForest'].values if 'NTCP_ML_RandomForest' in organ_data_valid.columns else np.array([])
                     
                     # Get refitted parameters for classical models
                     lkb_loglogit_params = None
@@ -4494,6 +4550,9 @@ def main():
                         if len(ntcp_xgb_pred) > 0 and len(ntcp_xgb_pred) == len(geud_vals):
                             ax.scatter(geud_vals, ntcp_xgb_pred,
                                      s=40, alpha=0.6, label="XGBoost")
+                        if len(ntcp_rf_pred) > 0 and len(ntcp_rf_pred) == len(geud_vals):
+                            ax.scatter(geud_vals, ntcp_rf_pred,
+                                     s=40, alpha=0.6, label="Random Forest")
                         
                         ax.set_xlabel(f"{organ} gEUD (Gy)", fontsize=14, fontweight="bold")
                         ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
@@ -4516,6 +4575,12 @@ def main():
                         if len(ntcp_ann_pred) > 0 and len(ntcp_ann_pred) == len(ntcp_obs):
                             ax.scatter(ntcp_obs, ntcp_ann_pred,
                                      label="ANN", alpha=0.6)
+                        if len(ntcp_xgb_pred) > 0 and len(ntcp_xgb_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_xgb_pred,
+                                     label="XGBoost", alpha=0.6)
+                        if len(ntcp_rf_pred) > 0 and len(ntcp_rf_pred) == len(ntcp_obs):
+                            ax.scatter(ntcp_obs, ntcp_rf_pred,
+                                     label="Random Forest", alpha=0.6)
                         if len(ntcp_lkb_probit_pred) > 0 and len(ntcp_lkb_probit_pred) == len(ntcp_obs):
                             ax.scatter(ntcp_obs, ntcp_lkb_probit_pred,
                                      label="LKB Probit", alpha=0.6)
@@ -4803,6 +4868,7 @@ def main():
                     ntcp_rs_pred = organ_data_valid['NTCP_RS_Poisson'].values if 'NTCP_RS_Poisson' in organ_data_valid.columns else np.array([])
                     ntcp_ann_pred = organ_data_valid['NTCP_ML_ANN'].values if 'NTCP_ML_ANN' in organ_data_valid.columns else np.array([])
                     ntcp_xgb_pred = organ_data_valid['NTCP_ML_XGBoost'].values if 'NTCP_ML_XGBoost' in organ_data_valid.columns else np.array([])
+                    ntcp_rf_pred = organ_data_valid['NTCP_ML_RandomForest'].values if 'NTCP_ML_RandomForest' in organ_data_valid.columns else np.array([])
                     
                     # Get refitted parameters
                     lkb_loglogit_params = None
@@ -4978,6 +5044,8 @@ def main():
                             ax.scatter(gEUD, ntcp_ann_pred, s=40, alpha=0.6, label="ANN")
                         if len(ntcp_xgb_pred) > 0:
                             ax.scatter(gEUD, ntcp_xgb_pred, s=40, alpha=0.6, label="XGBoost")
+                        if len(ntcp_rf_pred) > 0:
+                            ax.scatter(gEUD, ntcp_rf_pred, s=40, alpha=0.6, label="Random Forest")
                         
                         ax.set_xlabel("Parotid gEUD (Gy)", fontsize=14, fontweight="bold")
                         ax.set_ylabel("Predicted NTCP", fontsize=14, fontweight="bold")
@@ -5560,7 +5628,7 @@ def main():
                     
                     # Sheet 3: NTCP_ML
                     ntcp_ml_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ', 'Observed_Toxicity']
-                    ml_models = ['NTCP_ML_ANN', 'NTCP_ML_XGBoost']
+                    ml_models = ['NTCP_ML_ANN', 'NTCP_ML_XGBoost', 'NTCP_ML_RandomForest']
                     for col in ml_models:
                         if col in results_df.columns:
                             ntcp_ml_cols.append(col)
@@ -5571,7 +5639,7 @@ def main():
                                 ntcp_ml_df[col] = ntcp_ml_df[col].round(4)
                         ntcp_ml_df.to_excel(writer, sheet_name='NTCP_ML', index=False)
                     else:
-                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'NTCP_ML_ANN', 'NTCP_ML_XGBoost']).to_excel(
+                        pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'NTCP_ML_ANN', 'NTCP_ML_XGBoost', 'NTCP_ML_RandomForest']).to_excel(
                             writer, sheet_name='NTCP_ML', index=False)
                     
                     # Sheet 4: Radiobiology_Parameters
@@ -5676,7 +5744,7 @@ def main():
                         pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'QA_Flag', 'Overfitting_Risk']).to_excel(
                             writer, sheet_name='QA_Overfitting', index=False)
                     
-                    # Sheet 9: Leakage_Checks
+                    # Sheet 10: Leakage_Checks
                     leakage_cols = ['PrimaryPatientID', 'AnonPatientID', 'Organ']
                     leakage_data_cols = [col for col in results_df.columns if 'leakage' in col.lower() or 'data_leak' in col.lower()]
                     leakage_cols.extend(leakage_data_cols)
@@ -5688,7 +5756,7 @@ def main():
                         pd.DataFrame(columns=['PrimaryPatientID', 'Organ', 'Leakage_Check', 'Status']).to_excel(
                             writer, sheet_name='Leakage_Checks', index=False)
                     
-                    # Sheet 10: Parotid_Volume_Sensitivity
+                    # Sheet 11: Parotid_Volume_Sensitivity
                     sensitivity_file = Path(output_dir) / 'parotid_volume_sensitivity.xlsx'
                     if sensitivity_file.exists():
                         sensitivity_df = pd.read_excel(sensitivity_file)

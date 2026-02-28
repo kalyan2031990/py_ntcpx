@@ -147,8 +147,9 @@ class OverfitResistantMLModels:
         # Very small sample: minimal model
         if self.n_samples < 50:
             self.ANN_CONFIG['hidden_layer_sizes'] = (8,)
-            self.XGBOOST_CONFIG['max_depth'] = 1
+            self.XGBOOST_CONFIG['max_depth'] = 2   # Allow at least 2 splits (was 1; 1 caused constant)
             self.XGBOOST_CONFIG['n_estimators'] = 30
+            self.XGBOOST_CONFIG['min_child_weight'] = 2
             # Random Forest kept very shallow
             self.RANDOM_FOREST_CONFIG['max_depth'] = 2
             self.RANDOM_FOREST_CONFIG['n_estimators'] = 60
@@ -205,8 +206,8 @@ class OverfitResistantMLModels:
         if self.n_samples < 100:
             config['max_depth'] = 2
             config['n_estimators'] = 30
-            config['min_child_weight'] = 5  # Require more samples per leaf
-            config['learning_rate'] = 0.03  # Slower learning
+            config['min_child_weight'] = 2  # Allow more splits (was 5; 5 caused constant predictions)
+            config['learning_rate'] = 0.05   # Slightly higher so model can learn (was 0.03)
         
         # Handle class imbalance (if events < 40% or > 60% of samples)
         event_rate = self.n_events / self.n_samples if self.n_samples > 0 else 0.5

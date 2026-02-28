@@ -257,6 +257,10 @@ class ClinicalFactorsAnalyzer:
                 if 'DVH_ID' in self.clinical_data.columns:
                     self.clinical_data['PrimaryPatientID'] = self.clinical_data['DVH_ID']
                     has_primary_clinical = True
+                elif 'patient_id' in self.clinical_data.columns:
+                    # Code0 reconciled output (Clinical Contract v2)
+                    self.clinical_data['PrimaryPatientID'] = self.clinical_data['patient_id']
+                    has_primary_clinical = True
                 elif 'PatientID' in self.clinical_data.columns:
                     # Check if PatientID looks like AnonPatientID (PT format)
                     sample_pid = self.clinical_data['PatientID'].dropna().iloc[0] if len(self.clinical_data['PatientID'].dropna()) > 0 else ""
@@ -292,7 +296,7 @@ class ClinicalFactorsAnalyzer:
                         self.clinical_data['PrimaryPatientID'] = self.clinical_data['PatientID']
                         has_primary_clinical = True
                 else:
-                    raise ValueError("Clinical data must contain PrimaryPatientID, DVH_ID, or PatientID")
+                    raise ValueError("Clinical data must contain PrimaryPatientID, DVH_ID, patient_id, or PatientID")
             
             # NTCP results should already have PrimaryPatientID (from code3)
             if not has_primary_ntcp:

@@ -474,6 +474,22 @@ def plot_dose_response_curves(results_df, output_dir):
                     ntcp_smooth = gaussian_filter1d(ntcp_sorted, sigma=2.0)
                     ax.plot(geud_sorted, ntcp_smooth, 'c-.', label='XGBoost (LOESS)', linewidth=2)
         
+        # Tier 4: RandomForest (LOESS)
+        if 'ML_RandomForest' in organ_data.columns or 'NTCP_ML_RandomForest' in organ_data.columns:
+            rf_col = 'ML_RandomForest' if 'ML_RandomForest' in organ_data.columns else 'NTCP_ML_RandomForest'
+            valid_mask = ~organ_data[rf_col].isna()
+            if valid_mask.sum() > 5:
+                geud_valid = organ_data.loc[valid_mask, 'gEUD'].values
+                ntcp_valid = organ_data.loc[valid_mask, rf_col].values
+                
+                sort_idx = np.argsort(geud_valid)
+                geud_sorted = geud_valid[sort_idx]
+                ntcp_sorted = ntcp_valid[sort_idx]
+                
+                if len(geud_sorted) > 10:
+                    ntcp_smooth = gaussian_filter1d(ntcp_sorted, sigma=2.0)
+                    ax.plot(geud_sorted, ntcp_smooth, color='orange', linestyle='-.', label='Random Forest (LOESS)', linewidth=2)
+        
         ax.set_xlabel('gEUD (Gy)', fontsize=12)
         ax.set_ylabel('NTCP', fontsize=12)
         ax.set_title(f'Dose-Response Curves: {organ}', fontsize=14, fontweight='bold')
@@ -539,13 +555,18 @@ def plot_dose_response_curves(results_df, output_dir):
     print(f"\n  Saved combined plot: {combined_plot}")
 
 
-def create_ml_qa_validation(results_df, output_dir):
+def create_ml_qa_validation(results_df, output_dir, code3_output_dir=None):
     """
-    Create ML QA validation output
+    Create ML QA validation output.
+    
+    Reports Apparent_AUC (in-sample AUC on full data). For ML models, if code3
+    has written ml_cv_metrics.xlsx, merges CV_AUC and Test_AUC and sets
+    Overfitting_Gap = Apparent_AUC - CV_AUC (realistic overfitting check).
     
     Args:
         results_df: Results DataFrame
         output_dir: Output directory
+        code3_output_dir: Optional path to code3 output (to load ml_cv_metrics.xlsx)
     """
     print("\n" + "="*60)
     print("Creating ML QA Validation")
@@ -555,6 +576,27 @@ def create_ml_qa_validation(results_df, output_dir):
     output_path.mkdir(parents=True, exist_ok=True)
     
     from sklearn.metrics import roc_auc_score, brier_score_loss
+    
+    def calibration_metrics(y_true, y_pred, n_bins=10):
+        """Compute ECE and MCE (expected/maximum calibration error)."""
+        try:
+            bins = np.linspace(0, 1, n_bins + 1)
+            ece, mce = 0.0, 0.0
+            n = len(y_true)
+            if n < 10:
+                return np.nan, np.nan
+            for i in range(n_bins):
+                lo, hi = bins[i], bins[i + 1]
+                mask = (y_pred >= lo) & (y_pred < hi) if i < n_bins - 1 else (y_pred >= lo) & (y_pred <= hi)
+                if mask.sum() == 0:
+                    continue
+                acc = y_true[mask].mean()
+                conf = y_pred[mask].mean()
+                ece += np.abs(acc - conf) * mask.sum() / n
+                mce = max(mce, np.abs(acc - conf))
+            return round(ece, 4), round(mce, 4)
+        except Exception:
+            return np.nan, np.nan
     
     qa_data = []
     
@@ -573,8 +615,9 @@ def create_ml_qa_validation(results_df, output_dir):
             ('Local-LKB', 'NTCP_LKB_LOCAL'),
             ('MLE_LKB', 'NTCP_LKB_LogLogit_MLE'),
             ('Logistic', 'NTCP_LOGISTIC'),
-            ('ANN', 'ML_ANN'),
-            ('XGBoost', 'ML_XGBoost')
+            ('ANN', 'NTCP_ML_ANN'),
+            ('XGBoost', 'NTCP_ML_XGBoost'),
+            ('RandomForest', 'NTCP_ML_RandomForest')
         ]
         
         for model_name, col_name in models_to_eval:
@@ -591,31 +634,63 @@ def create_ml_qa_validation(results_df, output_dir):
             y_pred_valid = y_pred[valid_mask]
             
             try:
-                auc = roc_auc_score(y_true_valid, y_pred_valid)
+                auc_val = roc_auc_score(y_true_valid, y_pred_valid)
                 brier = brier_score_loss(y_true_valid, y_pred_valid)
-                
-                # Calculate overfitting gap (would need train/test split info)
-                # Simplified: use cross-validation or assume no overfitting for now
-                overfitting_gap = 0.0  # Placeholder
-                
+                ece, mce = calibration_metrics(y_true_valid, y_pred_valid)
                 qa_data.append({
                     'Organ': organ,
                     'Model': model_name,
-                    'Train_AUC': auc,  # Using full data as proxy
-                    'Test_AUC': auc,
-                    'Overfitting_Gap': overfitting_gap,
+                    'Apparent_AUC': auc_val,
+                    'Overfitting_Gap': np.nan,
                     'Brier_Score': brier,
+                    'ECE': ece,
+                    'MCE': mce,
                     'N_Samples': valid_mask.sum()
                 })
-            except:
+            except Exception:
                 pass
     
     if qa_data:
         qa_df = pd.DataFrame(qa_data)
+        # Merge code3 CV metrics if available (ML models only)
+        code3_path = Path(code3_output_dir) if code3_output_dir else None
+        cv_file = code3_path / 'ml_cv_metrics.xlsx' if code3_path else None
+        if cv_file and cv_file.exists():
+            try:
+                cv_df = pd.read_excel(cv_file)
+                merge_cols = [c for c in ['CV_AUC_mean', 'CV_AUC_std', 'Test_AUC', 'Constant_Predictor'] if c in cv_df.columns]
+                if merge_cols:
+                    qa_df = qa_df.merge(
+                        cv_df[['Organ', 'Model'] + merge_cols],
+                        on=['Organ', 'Model'],
+                        how='left'
+                    )
+                    if 'CV_AUC_mean' in qa_df.columns:
+                        qa_df['Overfitting_Gap'] = qa_df.apply(
+                            lambda r: (r['Apparent_AUC'] - r['CV_AUC_mean']) if pd.notna(r.get('CV_AUC_mean')) else np.nan,
+                            axis=1
+                        )
+                    # Flag high overfitting (gap > 0.1)
+                    if 'Overfitting_Gap' in qa_df.columns:
+                        qa_df['Overfitting_Flag'] = qa_df.apply(
+                            lambda r: 'High' if pd.notna(r.get('Overfitting_Gap')) and r['Overfitting_Gap'] > 0.1 else '',
+                            axis=1
+                        )
+            except Exception as e:
+                print(f"  Warning: Could not merge ml_cv_metrics.xlsx: {e}")
+        if 'Overfitting_Flag' not in qa_df.columns:
+            qa_df['Overfitting_Flag'] = ''
+        # Small-sample note for manuscript/report
+        n_total = qa_df['N_Samples'].max() if 'N_Samples' in qa_df.columns else 0
+        if n_total > 0 and n_total < 100:
+            note = f"Small sample (n={int(n_total)}). Prefer CV_AUC over Apparent_AUC for ML. Results exploratory."
+        else:
+            note = "Prefer CV_AUC over Apparent_AUC for ML models."
         qa_file = output_path / 'ml_validation.xlsx'
         
         with pd.ExcelWriter(qa_file, engine='openpyxl') as writer:
             qa_df.to_excel(writer, sheet_name='ML_QA', index=False)
+            pd.DataFrame([{'Note': note}]).to_excel(writer, sheet_name='Note', index=False)
         
         print(f"  Saved ML QA validation: {qa_file}")
     else:
@@ -863,7 +938,7 @@ def main():
     plot_dose_response_curves(results_df, args.output_dir)
     
     # Create ML QA validation
-    create_ml_qa_validation(results_df, args.output_dir)
+    create_ml_qa_validation(results_df, args.output_dir, args.code3_output)
     
     # Create master Excel report
     create_master_excel_report(results_df, args.output_dir)

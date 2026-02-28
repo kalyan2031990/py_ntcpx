@@ -265,6 +265,24 @@ def run_shap_analysis(code3_dir, output_dir):
                         except (ValueError, AttributeError):
                             model.base_score = 0.5
 
+                    # Use model's expected features so SHAP and X match (fixes RF shape mismatch)
+                    model_feature_names = None
+                    if hasattr(model, 'feature_names_in_'):
+                        model_feature_names = list(model.feature_names_in_)
+                    elif model_name == "XGBoost" and hasattr(model, 'get_booster'):
+                        try:
+                            model_feature_names = model.get_booster().feature_names
+                        except Exception:
+                            model_feature_names = None
+                    if model_feature_names is not None and len(model_feature_names) > 0:
+                        # Subset X to columns the model was trained on (preserve order)
+                        in_both = [c for c in model_feature_names if c in X.columns]
+                        if len(in_both) == len(model_feature_names):
+                            X = X[model_feature_names].copy()
+                        elif len(in_both) > 0:
+                            X = X[in_both].copy()
+                            feature_names = in_both
+
                     explainer = shap.TreeExplainer(model)
                     shap_values = explainer.shap_values(X)
 
@@ -287,7 +305,32 @@ def run_shap_analysis(code3_dir, output_dir):
                 if len(shap_values.shape) > 2:
                     shap_values = shap_values.reshape(shap_values.shape[0], -1)
                 
+                # Align SHAP and X to same number of features (fixes DimensionError for RandomForest)
+                n_x = X_plot.shape[1] if hasattr(X_plot, 'shape') else len(feature_names)
+                n_shap = shap_values.shape[1]
+                if n_shap != n_x:
+                    n_use = min(n_shap, n_x)
+                    shap_values = shap_values[:, :n_use]
+                    if hasattr(X_plot, 'iloc'):
+                        X_plot = X_plot.iloc[:, :n_use].copy()
+                    elif hasattr(X_plot, 'shape'):
+                        X_plot = X_plot[:, :n_use]
+                    feature_names = feature_names[:n_use]
+                    print(f"    Aligned SHAP/X to {n_use} features (was shap={n_shap}, X={n_x})")
+                
                 print(f"    Computed SHAP values: shape {shap_values.shape}")
+                
+                # Register for LIME early so RandomForest gets LIME even if plots fail later
+                if 'lime_models' not in locals():
+                    lime_models = {}
+                    lime_data = {}
+                lime_models[model_name] = model
+                lime_data[model_name] = {
+                    'X_train': X_plot,
+                    'X_scaled': X_scaled if model_name == "ANN" else X_plot,
+                    'scaler': scaler if model_name == "ANN" else None,
+                    'feature_names': feature_names
+                }
                 
                 # v3.0.0: Improved bootstrap SHAP with stability warnings for ANN
                 feature_stability = []
@@ -343,48 +386,43 @@ def run_shap_analysis(code3_dir, output_dir):
                         traceback.print_exc()
                         feature_stability = []
                 
-                # === SHAP API FIX: wrap into Explanation object ===
-                explanation = shap.Explanation(
-                    values=shap_values,
-                    data=X_plot.values,
-                    feature_names=X_plot.columns.tolist()
-                )
-                
-                # === Beeswarm plot ===
-                plt.figure(figsize=(10, 8))
-                shap.plots.beeswarm(explanation, show=False)
-                plt.title(f"SHAP Beeswarm — {organ} [{model_name}]", fontsize=14, fontweight='bold')
-                plt.tight_layout()
-                plt.savefig(organ_outdir / "shap_beeswarm.png", dpi=600, bbox_inches='tight')
-                plt.close()
-                print(f"    Saved beeswarm plot")
-                
-                # === Global importance bar plot (clinical standard) ===
-                plt.figure(figsize=(8, 6))
-                shap.plots.bar(explanation, show=False)
-                plt.title(f"Global Feature Importance — {organ} [{model_name}]", fontsize=14, fontweight='bold')
-                plt.tight_layout()
-                plt.savefig(organ_outdir / "shap_bar.png", dpi=600, bbox_inches='tight')
-                plt.close()
-                print(f"    Saved bar plot")
-                
-                # === Save SHAP values table ===
+                # === Save SHAP values table first (so RandomForest gets it even if plots fail) ===
                 shap_df = pd.DataFrame(shap_values, columns=feature_names)
                 shap_df.to_excel(organ_outdir / "shap_table.xlsx", index=False)
                 print(f"    Saved SHAP values table")
                 
-                # v3.0.0: Store model and data for LIME analysis
-                if 'lime_models' not in locals():
-                    lime_models = {}
-                    lime_data = {}
-                lime_models[model_name] = model
-                lime_data[model_name] = {
-                    'X_train': X_plot,
-                    'X_scaled': X_scaled if model_name == "ANN" else X_plot,
-                    'scaler': scaler if model_name == "ANN" else None,
-                    'feature_names': feature_names
-                }
+                # === SHAP API: wrap into Explanation object and save plots (try/except so one failure doesn't skip LIME) ===
+                try:
+                    explanation = shap.Explanation(
+                        values=shap_values,
+                        data=X_plot.values if hasattr(X_plot, 'values') else X_plot,
+                        feature_names=feature_names
+                    )
+                    
+                    # Beeswarm plot
+                    plt.figure(figsize=(10, 8))
+                    shap.plots.beeswarm(explanation, show=False)
+                    plt.title(f"SHAP Beeswarm — {organ} [{model_name}]", fontsize=14, fontweight='bold')
+                    plt.tight_layout()
+                    plt.savefig(organ_outdir / "shap_beeswarm.png", dpi=600, bbox_inches='tight')
+                    plt.close()
+                    print(f"    Saved beeswarm plot")
+                    
+                    # Global importance bar plot
+                    plt.figure(figsize=(8, 6))
+                    shap.plots.bar(explanation, show=False)
+                    plt.title(f"Global Feature Importance — {organ} [{model_name}]", fontsize=14, fontweight='bold')
+                    plt.tight_layout()
+                    plt.savefig(organ_outdir / "shap_bar.png", dpi=600, bbox_inches='tight')
+                    plt.close()
+                    print(f"    Saved bar plot")
+                except Exception as plot_err:
+                    print(f"    Warning: SHAP plots failed ({plot_err}); shap_table.xlsx was saved.")
+                    import traceback
+                    traceback.print_exc()
                 
+                # (lime_models/lime_data already registered above)
+            
             except Exception as e:
                 print(f"    [ERROR] Failed to process {model_name}: {e}")
                 import traceback
@@ -595,7 +633,7 @@ def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100):
     Parameters
     ----------
     model : trained model
-        ML model (ANN or XGBoost)
+        ML model (ANN, XGBoost, or RandomForest)
     X : pd.DataFrame
         Feature matrix
     model_type : str
@@ -623,7 +661,7 @@ def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100):
         
         try:
             # Calculate SHAP values
-            if model_type.lower() == 'xgboost':
+            if model_type.lower() in ('xgboost', 'randomforest'):
                 explainer = shap.TreeExplainer(model)
                 shap_values = explainer.shap_values(X_boot)
                 # Handle multi-class output

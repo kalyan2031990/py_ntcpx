@@ -593,6 +593,12 @@ class PublicationTableGenerator:
                 'Source': 'This work'
             },
             {
+                'Model': 'Random Forest',
+                'Equation': 'Random forest ensemble',
+                'Parameters': 'Learned trees',
+                'Source': 'This work'
+            },
+            {
                 'Model': 'uNTCP',
                 'Equation': 'NTCP +/- sigma via Delta method',
                 'Parameters': 'Uncertainty propagation',
