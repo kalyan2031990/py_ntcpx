@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Rectangle, Circle
 import numpy as np
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -65,6 +66,32 @@ COLORS = {
     'arrow': '#333333',
     'text': '#000000'
 }
+
+
+def save_figure_canonical(fig, output_dir: str, base_name: str, organ: str = "",
+                           dpi: int = 600, formats: list = None):
+    """
+    Save figure with canonical naming: {base_name}_{organ}.png only.
+    Removes any existing non-organ-suffixed version to prevent duplication.
+    """
+    if formats is None:
+        formats = ['png']
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    for fmt in formats:
+        if organ:
+            canonical_name = f"{base_name}_{organ}.{fmt}"
+        else:
+            canonical_name = f"{base_name}.{fmt}"
+        canonical_path = os.path.join(output_dir, canonical_name)
+        fig.savefig(canonical_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+
+        # Remove non-suffixed duplicate for organ-specific plots
+        if organ:
+            duplicate_path = os.path.join(output_dir, f"{base_name}.{fmt}")
+            if os.path.exists(duplicate_path):
+                os.remove(duplicate_path)
 
 
 def generate_figure1_workflow(output_dir: Path, dpi: int = 1200) -> None:
@@ -221,10 +248,9 @@ def generate_figure1_workflow(output_dir: Path, dpi: int = 1200) -> None:
         ax.text(0.2, lanes['qa'], 'QA / XAI / Output', ha='right', va='center',
                 fontsize=10, weight='bold', rotation=90)
     
-        # Save
+        # Save (use canonical helper without organ suffix for global figures)
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_workflow.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_workflow.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_workflow', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_workflow.png, figure_workflow.svg")
@@ -339,8 +365,7 @@ def generate_figure2_feature_model_matrix(output_dir: Path, dpi: int = 1200) -> 
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_feature_model_matrix.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_feature_model_matrix.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_feature_model_matrix', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_feature_model_matrix.png, figure_feature_model_matrix.svg")
@@ -462,8 +487,7 @@ def generate_figure3_methodology_spectrum(output_dir: Path, dpi: int = 1200) -> 
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_methodology.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_methodology.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_methodology', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_methodology.png, figure_methodology.svg")
@@ -580,8 +604,7 @@ def generate_figure4_xai_shap(output_dir: Path, dpi: int = 1200) -> None:
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_xai_shap.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_xai_shap.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_xai_shap', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_xai_shap.png, figure_xai_shap.svg")
@@ -699,8 +722,7 @@ def generate_figure2a_feature_taxonomy(output_dir: Path, dpi: int = 1200) -> Non
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_feature_taxonomy.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_feature_taxonomy.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_feature_taxonomy', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_feature_taxonomy.png, figure_feature_taxonomy.svg")
@@ -800,8 +822,7 @@ def generate_figure3a_model_spectrum(output_dir: Path, dpi: int = 1200) -> None:
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_model_spectrum.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_model_spectrum.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_model_spectrum', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_model_spectrum.png, figure_model_spectrum.svg")
@@ -929,8 +950,7 @@ def generate_figure4a_shap_integration(output_dir: Path, dpi: int = 1200) -> Non
         
         # Save
         output_dir.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_dir / 'figure_shap_integration.png', dpi=dpi, bbox_inches='tight', facecolor='white')
-        plt.savefig(output_dir / 'figure_shap_integration.svg', format='svg', bbox_inches='tight')
+        save_figure_canonical(fig, str(output_dir), 'figure_shap_integration', organ="", dpi=dpi, formats=['png', 'svg'])
         plt.close()
         
         logger.info(f"Saved: figure_shap_integration.png, figure_shap_integration.svg")

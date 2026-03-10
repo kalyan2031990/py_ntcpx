@@ -1,7 +1,10 @@
 """
 ML models with aggressive overfitting prevention
 
-Designed for small sample sizes with proper EPV (Events Per Variable) validation
+Designed for small sample sizes with proper EPV (Events Per Variable) validation.
+
+v1.1.0: EPV checking migrated to ntcp_models.check_epv / EPVError with an optional
+STRICT_EPV flag for hard gating vs. auto-reduction / warning behaviour.
 """
 
 import numpy as np
@@ -13,6 +16,8 @@ from sklearn.base import clone
 from sklearn.model_selection import StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+
+from ntcp_models import check_epv, EPVError
 
 try:
     import xgboost as xgb
@@ -83,7 +88,8 @@ class OverfitResistantMLModels:
         'random_state': 42
     }
     
-    def __init__(self, n_features: int, n_samples: int, n_events: int, random_seed: int = 42):
+    def __init__(self, n_features: int, n_samples: int, n_events: int,
+                 random_seed: int = 42, strict_epv: bool = False):
         """
         Initialize with sample size awareness
         
@@ -106,6 +112,7 @@ class OverfitResistantMLModels:
         self.n_samples = n_samples
         self.n_events = n_events
         self.random_seed = random_seed
+        self.strict_epv = strict_epv
         self.epv = n_events / max(n_features, 1)
         
         # Update random seed in configs
@@ -114,23 +121,35 @@ class OverfitResistantMLModels:
         self.RANDOM_FOREST_CONFIG['random_state'] = random_seed
         self.GRADIENT_BOOSTING_CONFIG['random_state'] = random_seed
         
-        # Validate sample size adequacy
-        # Note: EPV < 5 should trigger auto-feature reduction before model creation
-        # This check is a safety net - feature reduction should happen earlier
-        if self.epv < 5:
-            # Try to auto-reduce features if possible
-            # This requires feature reduction to happen before model creation
-            raise ValueError(
-                f"CRITICAL: EPV too low ({self.epv:.1f}). "
-                f"Minimum EPV = 5 required. Cannot train model safely. "
-                f"Use AutoFeatureReducer to reduce features before creating model."
-            )
-        elif self.epv < 10:
-            warnings.warn(
-                f"LOW EPV WARNING: {self.epv:.1f} events per variable. "
-                f"Recommended EPV >= 10. Consider feature reduction. "
-                f"Model complexity will be automatically reduced."
-            )
+        # EPV validation (Tier 4 ML)
+        # Critical guard: EPV < 5 always raises ValueError (as in v1.0 behaviour).
+        # Between 5 and 10, behaviour depends on strict_epv:
+        # - strict_epv=True: EPVError via check_epv (hard block)
+        # - strict_epv=False: emit warning only (exploratory), allow training
+        if n_events > 0 and n_features > 0:
+            if self.epv < 5.0:
+                raise ValueError(
+                    f"CRITICAL: EPV too low ({self.epv:.1f}). "
+                    f"Minimum EPV = 5 required. Cannot train model safely. "
+                    f"Use AutoFeatureReducer to reduce features before creating model."
+                )
+            if self.strict_epv:
+                # Hard gate at EPV >= 10
+                check_epv(
+                    n_events=n_events,
+                    n_features=n_features,
+                    min_epv=10.0,
+                    model_name="Tier4 ML",
+                )
+            else:
+                # Advisory only; downstream QA (NTCPEvaluator / code4) will flag low EPV
+                if self.epv < 10.0:
+                    warnings.warn(
+                        f"LOW EPV WARNING (Tier4 ML): EPV = {self.epv:.1f} "
+                        f"for {n_events} events and {n_features} features. "
+                        f"Recommended EPV ≥ 10; treat results as exploratory.",
+                        UserWarning,
+                    )
         
         # Auto-adjust complexity based on sample size
         self._adjust_model_complexity()

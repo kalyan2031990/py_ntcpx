@@ -193,6 +193,32 @@ def brier_safe(y_true, y_pred) -> float:
         return float("nan")
 
 
+def flag_overfitting(apparent_auc: float, cv_auc: float = None,
+                     overfitting_gap_threshold: float = 0.10) -> tuple:
+    """
+    Determine overfitting flag status.
+
+    Returns: (flag: bool, severity: str, message: str)
+    """
+    if cv_auc is None or (isinstance(cv_auc, float) and np.isnan(cv_auc)):
+        # For fixed-parameter models or when CV is unavailable
+        return False, 'N/A', 'Fixed-parameter model — overfitting not applicable'
+
+    if apparent_auc is None or (isinstance(apparent_auc, float) and np.isnan(apparent_auc)):
+        return False, 'N/A', 'Apparent AUC unavailable'
+
+    gap = apparent_auc - cv_auc
+
+    if gap > 0.30 or (cv_auc < 0.50):
+        return True, 'CRITICAL', f'Gap={gap:.3f}; CV-AUC={cv_auc:.3f} (below chance)'
+    elif gap > 0.15 or (cv_auc < 0.55 and apparent_auc > 0.65):
+        return True, 'HIGH', f'Gap={gap:.3f}; CV-AUC={cv_auc:.3f}'
+    elif gap > overfitting_gap_threshold:
+        return True, 'MODERATE', f'Gap={gap:.3f}'
+    else:
+        return False, 'NONE', f'Gap={gap:.3f} — acceptable'
+
+
 def flag_unrealistic(ntcp_vals: pd.Series) -> List[str]:
     ntcp_vals = pd.to_numeric(ntcp_vals, errors="coerce")
     flags = []
@@ -287,12 +313,19 @@ def main():
         aliases = {"NTCP_LKB_LogLogit":"NTCP_lkb_loglogit", "NTCP_LKB_Probit":"NTCP_lkb_probit", "NTCP_RS_Poisson":"NTCP_rs_poisson"}
         for organ in organs:
             sub = combined[combined["Organ"] == organ].copy()
-            n = len(sub)
+            n_rows = len(sub)
+            if "PrimaryPatientID" in sub.columns:
+                n_patients = sub["PrimaryPatientID"].astype(str).str.strip().nunique()
+            elif "PatientID" in sub.columns:
+                n_patients = sub["PatientID"].astype(str).str.strip().nunique()
+            else:
+                n_patients = n_rows
+
             if "Observed_Toxicity" in sub.columns:
                 events = int(pd.to_numeric(sub["Observed_Toxicity"], errors="coerce").fillna(0).sum())
             else:
                 events = np.nan
-            event_rate = (events/n*100 if n>0 and not np.isnan(events) else np.nan)
+            event_rate = (events / n_patients * 100 if n_patients > 0 and not np.isnan(events) else np.nan)
 
             # Metrics
             perf = {}
@@ -307,8 +340,8 @@ def main():
                     }
 
             # Data quality flags
-            if n < 20:
-                issues.append(f"{organ}: Low sample size (n={n})")
+            if n_patients < 20:
+                issues.append(f"{organ}: Low sample size (n={n_patients})")
             if not np.isnan(events) and events < 5:
                 issues.append(f"{organ}: Few events (events={events})")
 
@@ -323,8 +356,11 @@ def main():
                 if ml_key in perf:
                     auc_v = perf[ml_key]["AUC"]
                     if not (auc_v is None or np.isnan(auc_v)):
-                        if (n < 40 or (not np.isnan(events) and events < 8)) and auc_v >= 0.90:
-                            issues.append(f"{organ}: Potential ML overfitting/leakage (AUC={auc_v:.3f}, n={n}, events={events})")
+                        if (n_patients < 40 or (not np.isnan(events) and events < 8)) and auc_v >= 0.90:
+                            issues.append(
+                                f"{organ}: Potential ML overfitting/leakage "
+                                f"(AUC={auc_v:.3f}, n={n_patients}, events={events})"
+                            )
 
             # Traditional models optimism under very low events
             for trad in ["NTCP_LKB_LogLogit", "NTCP_LKB_Probit", "NTCP_RS_Poisson"]:
@@ -342,9 +378,17 @@ def main():
                     best_model = k
 
             row = {
-                "Organ": organ, "n": n, "events": events,
-                "event_rate_%": (round(event_rate, 1) if isinstance(event_rate, (int, float)) and not np.isnan(event_rate) else np.nan),
-                "best_model": best_model, "best_auc": (round(best_auc, 3) if best_auc >= 0 else np.nan),
+                "Organ": organ,
+                "n": n_patients,
+                "n_rows": n_rows,
+                "events": events,
+                "event_rate_%": (
+                    round(event_rate, 1)
+                    if isinstance(event_rate, (int, float)) and not np.isnan(event_rate)
+                    else np.nan
+                ),
+                "best_model": best_model,
+                "best_auc": (round(best_auc, 3) if best_auc >= 0 else np.nan),
             }
             for k, v in perf.items():
                 row[f"AUC|{k}"] = (round(v["AUC"], 3) if v["AUC"] == v["AUC"] else np.nan)
@@ -355,9 +399,9 @@ def main():
         issues.append("Could not locate a patient-level results table or Organ column in outputs.")
 
     summary_df = pd.DataFrame(report_rows) if report_rows else pd.DataFrame()
-
+    
     # Global stats
-    global_rows = int(summary_df["n"].sum()) if "n" in summary_df else np.nan
+    global_rows = int(summary_df["n_rows"].sum()) if "n_rows" in summary_df else np.nan
     global_patients = len(patient_ids) if patient_ids else np.nan
 
     # Save tables

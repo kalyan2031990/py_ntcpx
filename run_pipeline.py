@@ -3,7 +3,7 @@
 run_pipeline.py - Complete NTCP Pipeline Orchestrator
 =====================================================
 
-Orchestrates the complete py_ntcpx v1.0 pipeline execution:
+Orchestrates the complete py_ntcpx v1.1.0 pipeline execution:
 1. code1_dvh_preprocess
 2. code2_dvh_plot_and_summary
 3. code2_bDVH (NEW - Biological DVH)
@@ -14,7 +14,7 @@ Orchestrates the complete py_ntcpx v1.0 pipeline execution:
 8. shap_code7 (True-Model SHAP - Clinical Grade)
 9. supp_results_summary (NEW - Publication tables)
 
-Software: py_ntcpx_v1.0.0
+Software: py_ntcpx_v1.1.0
 """
 
 from __future__ import annotations
@@ -405,7 +405,9 @@ class PipelineOrchestrator:
         success = self.run_command(cmd, "Step 3b: QUANTEC Stratification")
         return success
     
-    def step3c_tiered_analysis(self, clinical_file: Optional[Path] = None) -> bool:
+    def step3c_tiered_analysis(self, clinical_file: Optional[Path] = None,
+                               cv_strategy: str = 'auto',
+                               include_age: bool = True) -> bool:
         """Step 3c: Tiered NTCP Analysis (runs after Step 3)"""
         # Check if code3 output exists
         if not self.code3_output.exists():
@@ -427,11 +429,14 @@ class PipelineOrchestrator:
             'tiered_ntcp_analysis.py',
             '--code3_output', str(self.code3_output),
             '--dvh_dir', str(dvh_dir),
-            '--output_dir', str(tiered_output)
+            '--output_dir', str(tiered_output),
+            '--cv_strategy', cv_strategy,
         ]
         
         if clinical_file and clinical_file.exists():
             cmd.extend(['--clinical_file', str(clinical_file)])
+        if include_age:
+            cmd.append('--include_age')
         
         success = self.run_command(cmd, "Step 3c: Tiered NTCP Analysis")
         return success
@@ -572,7 +577,10 @@ class PipelineOrchestrator:
     def run_complete_pipeline(self, input_txt_dir: Path, patient_data_file: Path,
                             clinical_file: Optional[Path] = None,
                             skip_steps: Optional[list] = None,
-                            resume_from: Optional[str] = None) -> bool:
+                            resume_from: Optional[str] = None,
+                            strict_epv: bool = False,
+                            cv_strategy: str = 'auto',
+                            include_age: bool = True) -> bool:
         """
         Run complete pipeline
         
@@ -588,7 +596,7 @@ class PipelineOrchestrator:
         skip_steps = skip_steps or []
         
         logger.info("=" * 60)
-        logger.info("py_ntcpx v1.0 - Complete Pipeline Orchestration")
+        logger.info("py_ntcpx v1.1.0 - Complete Pipeline Orchestration")
         logger.info("=" * 60)
         logger.info(f"Input DVH directory: {input_txt_dir}")
         logger.info(f"Patient data file: {patient_data_file}")
@@ -605,7 +613,11 @@ class PipelineOrchestrator:
             ('step2b', 2.5, "Biological DVH Generation", lambda: self.step2_bdvh(clinical_file)),
             ('step3', 3, "NTCP Analysis with ML", lambda: self.step3_ntcp_analysis(reconciled_file_container['file'])),
             ('step3b', 3.5, "QUANTEC Stratification", self.step3_quantec_stratification),
-            ('step3c', 3.6, "Tiered NTCP Analysis", lambda: self.step3c_tiered_analysis(clinical_file)),
+            ('step3c', 3.6, "Tiered NTCP Analysis", lambda: self.step3c_tiered_analysis(
+                clinical_file,
+                cv_strategy=cv_strategy,
+                include_age=include_age,
+            )),
             ('step4', 4, "QA Reporter", self.step4_qa_reporter),
             ('step5', 5, "Clinical Factors Analysis", lambda: self.step5_factors_analysis(reconciled_file_container['file'])),
             ('step6', 6, "Publication Diagrams", self.step6_publication_diagrams),
@@ -820,6 +832,25 @@ Software: py_ntcpx_v1.0.0
         choices=['step1', 'step0', 'step2', 'step2b', 'step3', 'step3b', 'step3c', 'step4', 'step5', 'step6', 'step7'],
         help='Resume pipeline from a specific step (validates required contracts before continuing)'
     )
+    parser.add_argument(
+        '--strict_epv',
+        action='store_true',
+        default=False,
+        help='If set, block model fitting when EPV < minimum instead of only warning',
+    )
+    parser.add_argument(
+        '--cv_strategy',
+        type=str,
+        default='auto',
+        choices=['auto', 'LOO', '5-fold'],
+        help="Override CV strategy for Tier 3 logistic models in tiered_ntcp_analysis",
+    )
+    parser.add_argument(
+        '--include_age',
+        action='store_true',
+        default=True,
+        help='Include age as covariate in Tier 3 when EPV budget allows (default: True)',
+    )
     
     args = parser.parse_args()
     
@@ -846,7 +877,10 @@ Software: py_ntcpx_v1.0.0
         patient_data_file=patient_data_file or Path('dummy'),
         clinical_file=clinical_file,
         skip_steps=args.skip,
-        resume_from=args.resume_from
+        resume_from=args.resume_from,
+        strict_epv=args.strict_epv,
+        cv_strategy=args.cv_strategy,
+        include_age=args.include_age,
     )
     
     return 0 if success else 1

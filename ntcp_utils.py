@@ -2,7 +2,11 @@
 """
 Utility functions for robust NTCP pipeline
 ==========================================
-Column normalization and flexible DVH file matching for Head & Neck cancer
+
+v1.1.0 adds:
+- Column normalization helpers
+- Flexible DVH file matching for Head & Neck cancer
+- Canonical NTCP column deduplication for unified outputs.
 """
 
 import pandas as pd
@@ -124,4 +128,54 @@ def find_dvh_file(dvh_dir, patient_id, patient_name, organ):
                 return file
     
     return None
+
+
+def deduplicate_ntcp_columns(df: pd.DataFrame,
+                             canonical_map: dict = None) -> pd.DataFrame:
+    """
+    Resolve duplicate NTCP columns by keeping canonical names and dropping redundant ones.
+
+    canonical_map: {canonical_col: [list of known aliases]}
+
+    This is used near the end of the tiered NTCP analysis to ensure that the final
+    per-patient table has a single, publication-ready set of NTCP columns while
+    preserving legacy names where needed.
+    """
+    if df is None or df.empty:
+        return df
+
+    if canonical_map is None:
+        canonical_map = {
+            # Monte Carlo (3 duplicate sets → 1 canonical)
+            'MC_NTCP_Mean': ['MonteCarlo_NTCP_mean', 'NTCP_MonteCarlo'],
+            'MC_NTCP_Std': ['MonteCarlo_NTCP_std', 'NTCP_MonteCarlo_std'],
+            'MC_NTCP_CI_L': ['NTCP_MonteCarlo_ci_lower'],
+            'MC_NTCP_CI_U': ['NTCP_MonteCarlo_ci_upper'],
+            # Probabilistic gEUD (2 duplicate sets → 1 canonical)
+            'NTCP_Probabilistic_gEUD': ['ProbNTCP_Mean', 'Prob_gEUD_mean'],
+            'NTCP_Probabilistic_gEUD_std': ['ProbNTCP_Std', 'Prob_gEUD_std'],
+            'NTCP_Probabilistic_gEUD_CI_L': ['ProbNTCP_CI_L'],
+            'NTCP_Probabilistic_gEUD_CI_U': ['ProbNTCP_CI_U'],
+            # Tier 3 rename (backward-compatible alias)
+            'NTCP_MV_Logistic_apparent': ['NTCP_LOGISTIC'],
+        }
+
+    for canonical, aliases in canonical_map.items():
+        for alias in aliases:
+            if alias in df.columns:
+                if canonical not in df.columns:
+                    df = df.rename(columns={alias: canonical})
+                else:
+                    # Both exist — verify they are identical, then drop alias
+                    try:
+                        if df[canonical].equals(df[alias]):
+                            df = df.drop(columns=[alias])
+                        else:
+                            # Keep both but rename alias to avoid collision for QA
+                            df = df.rename(columns={alias: f"{alias}_DUPLICATE_CHECK"})
+                    except Exception:
+                        df = df.rename(columns={alias: f"{alias}_DUPLICATE_CHECK"})
+
+    return df
+
 

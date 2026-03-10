@@ -387,8 +387,24 @@ def run_shap_analysis(code3_dir, output_dir):
                         feature_stability = []
                 
                 # === Save SHAP values table first (so RandomForest gets it even if plots fail) ===
-                shap_df = pd.DataFrame(shap_values, columns=feature_names)
-                shap_df.to_excel(organ_outdir / "shap_table.xlsx", index=False)
+                # Index by AnonPatientID where available for patient-level traceability
+                if matrix is not None and isinstance(matrix, pd.DataFrame):
+                    if 'AnonPatientID' in matrix.columns:
+                        patient_ids = matrix['AnonPatientID'].values
+                        index_name = 'AnonPatientID'
+                    elif 'PrimaryPatientID' in matrix.columns:
+                        patient_ids = matrix['PrimaryPatientID'].values
+                        index_name = 'PrimaryPatientID'
+                    else:
+                        patient_ids = np.arange(len(shap_values))
+                        index_name = 'Index'
+                else:
+                    patient_ids = np.arange(len(shap_values))
+                    index_name = 'Index'
+
+                shap_df = pd.DataFrame(shap_values, columns=feature_names, index=patient_ids)
+                shap_df.index.name = index_name
+                shap_df.to_excel(organ_outdir / "shap_table.xlsx")
                 print(f"    Saved SHAP values table")
                 
                 # === SHAP API: wrap into Explanation object and save plots (try/except so one failure doesn't skip LIME) ===

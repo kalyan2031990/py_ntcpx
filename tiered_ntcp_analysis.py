@@ -41,6 +41,8 @@ except ImportError:
 
 # Import existing modules
 from code3_ntcp_analysis_ml import DVHProcessor, NTCPCalculator
+from ntcp_utils import deduplicate_ntcp_columns
+from src.metrics import NTCPEvaluator
 try:
     from ntcp_qa_modules import CohortConsistencyScore
 except ImportError:
@@ -99,7 +101,7 @@ def load_dvh_for_patient(dvh_dir, primary_patient_id, organ):
     return dvh
 
 
-def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
+def add_tier2_mle_predictions(results_df, dvh_dir, output_dir, dvh_dict=None):
     """
     Add Tier 2: MLE-refitted LKB & RS predictions
     
@@ -131,7 +133,7 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
         # Prepare data for MLE fitting
         geud_values = organ_data['gEUD'].values
         outcomes = organ_data['Observed_Toxicity'].values.astype(int)
-        
+
         # Prepare dose_metrics for probit model
         dose_metrics_list = []
         for _, row in organ_data.iterrows():
@@ -140,6 +142,30 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
                 'v_effective': row.get('v_effective', 1.0),
                 'max_dose': row.get('max_dose', row['gEUD'])
             })
+
+        # Prepare DVH arrays for RS Poisson MLE (if DVH data available)
+        dvh_arrays = []
+        if dvh_dict is not None:
+            # Use pre-loaded DVH dictionary for efficiency
+            for _, row in organ_data.iterrows():
+                pid = row.get('PrimaryPatientID')
+                if pid in dvh_dict:
+                    dvh_arrays.append(dvh_dict[pid])
+                else:
+                    dvh_arrays.append(None)
+        else:
+            # Fallback: load DVH files on the fly via DVHProcessor
+            for _, row in organ_data.iterrows():
+                primary_id = row.get('PrimaryPatientID')
+                try:
+                    dvh, _ = dvh_processor.load_dvh_file(primary_id, organ, dvh_id=primary_id)
+                    dvh_arrays.append(dvh)
+                except Exception:
+                    dvh_arrays.append(None)
+
+        # Filter out missing DVHs while keeping alignment via indices
+        organ_indices = organ_data.index
+        dvh_arrays_valid = [d for d in dvh_arrays if d is not None]
         
         # Fit MLE models
         print(f"    Fitting LKB Probit MLE...")
@@ -147,26 +173,46 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
         
         print(f"    Fitting LKB LogLogit MLE...")
         loglogit_params = mle_calculator.fit_lkb_loglogit_mle(geud_values, outcomes)
-        
+
+        # Optional: RS Poisson MLE (requires DVH arrays)
+        rs_params = None
+        if len(dvh_arrays_valid) > 0:
+            print(f"    Fitting RS Poisson MLE (DVH-based)...")
+            try:
+                # Use only non-None DVHs aligned with outcomes
+                valid_indices = [i for i, d in enumerate(dvh_arrays) if d is not None]
+                dvh_valid = [dvh_arrays[i] for i in valid_indices]
+                outcomes_valid = outcomes[valid_indices]
+                rs_mle_params = mle_calculator.fit_rs_poisson_mle(dvh_valid, outcomes_valid)
+                if rs_mle_params and rs_mle_params.get('converged', False):
+                    rs_params = rs_mle_params
+                    print(f"    RS Poisson MLE converged for {organ}")
+                else:
+                    print(f"    RS Poisson MLE did not converge for {organ}")
+            except Exception as e:
+                print(f"  RS Poisson MLE fitting failed for {organ}: {e}")
+                rs_params = None
+
         # Store fitted parameters
         mle_calculator.fitted_params[organ] = {
             'LKB_Probit_MLE': probit_params,
-            'LKB_LogLogit_MLE': loglogit_params
+            'LKB_LogLogit_MLE': loglogit_params,
+            'RS_Poisson_MLE': rs_params
         }
-        
+
         # Calculate predictions for all patients in organ
-        organ_indices = organ_data.index
         ntcp_lkb_probit_mle = []
         ntcp_lkb_loglogit_mle = []
-        
-        for idx in organ_indices:
+        ntcp_rs_poisson_mle = []
+
+        for idx, dvh in zip(organ_indices, dvh_arrays):
             row = results_df.loc[idx]
             dose_metrics = {
                 'gEUD': row['gEUD'],
                 'v_effective': row.get('v_effective', 1.0),
                 'max_dose': row.get('max_dose', row['gEUD'])
             }
-            
+
             # LKB Probit MLE
             if probit_params and probit_params.get('converged', False):
                 ntcp_probit = mle_calculator.calculator.ntcp_lkb_probit(
@@ -178,7 +224,7 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
                 ntcp_lkb_probit_mle.append(ntcp_probit)
             else:
                 ntcp_lkb_probit_mle.append(np.nan)
-            
+
             # LKB LogLogit MLE
             if loglogit_params and loglogit_params.get('converged', False):
                 ntcp_loglogit = mle_calculator.calculator.ntcp_lkb_loglogit(
@@ -189,20 +235,29 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir):
                 ntcp_lkb_loglogit_mle.append(ntcp_loglogit)
             else:
                 ntcp_lkb_loglogit_mle.append(np.nan)
-        
+
+            # RS Poisson MLE
+            if rs_params and rs_params.get('converged', False) and dvh is not None:
+                ntcp_rs = mle_calculator.calculate_ntcp_rs_mle(dvh, organ)
+                ntcp_rs_poisson_mle.append(ntcp_rs)
+            else:
+                ntcp_rs_poisson_mle.append(np.nan)
+
         # Add to results DataFrame
         results_df.loc[organ_indices, 'NTCP_LKB_Probit_MLE'] = ntcp_lkb_probit_mle
         results_df.loc[organ_indices, 'NTCP_LKB_LogLogit_MLE'] = ntcp_lkb_loglogit_mle
-        
-        print(f"    Added MLE predictions for {organ}")
+        results_df.loc[organ_indices, 'NTCP_RS_Poisson_MLE'] = ntcp_rs_poisson_mle
+
+        print(f"    Added MLE predictions (including RS Poisson where available) for {organ}")
     
-    # Save MLE parameters
+    # Save MLE parameters (now includes RS_Poisson_MLE when available)
     mle_calculator.save_parameters(output_dir)
     
     return results_df
 
 
-def add_tier3_logistic_predictions(results_df, clinical_file, output_dir):
+def add_tier3_logistic_predictions(results_df, clinical_file, output_dir,
+                                   cv_strategy: str = 'auto', include_age: bool = True):
     """
     Add Tier 3: Modern multivariable logistic NTCP
     
@@ -227,7 +282,8 @@ def add_tier3_logistic_predictions(results_df, clinical_file, output_dir):
         except:
             print(f"  Warning: Could not load clinical data, using DVH-only model")
     
-    logistic_model = ModernLogisticNTCP()
+    logistic_model = ModernLogisticNTCP(include_age=include_age)
+    tier3_metrics = {}
     
     # Process each organ separately
     for organ in sorted(results_df['Organ'].unique()):
@@ -239,22 +295,109 @@ def add_tier3_logistic_predictions(results_df, clinical_file, output_dir):
         
         print(f"\n  Training logistic model for {organ} (n={len(organ_data)})...")
         
-        # Train model
-        train_results = logistic_model.train_model(organ_data, organ, clinical_data)
-        
-        if train_results is None:
-            print(f"    Training failed for {organ}")
-            continue
-        
-        # Predict NTCP
-        predictions = logistic_model.predict_ntcp(organ_data, organ, clinical_data)
-        
-        # Add to results DataFrame
+        # Cross-validated NTCP predictions (honest performance)
+        cv_results = logistic_model.predict_ntcp_cv(
+            organ_data, organ, clinical_data, cv_strategy=cv_strategy
+        )
+
         organ_indices = organ_data.index
-        results_df.loc[organ_indices, 'NTCP_LOGISTIC'] = predictions
-        
-        print(f"    Added logistic predictions for {organ}")
+        # Store apparent and CV predictions with new canonical names
+        results_df.loc[organ_indices, 'NTCP_MV_Logistic_apparent'] = cv_results['predictions_apparent']
+        results_df.loc[organ_indices, 'NTCP_MV_Logistic_cv'] = cv_results['predictions_cv']
+        # Backward-compatible alias
+        results_df.loc[organ_indices, 'NTCP_LOGISTIC'] = cv_results['predictions_apparent']
+
+        # Store per-organ Tier 3 metrics for later evaluation
+        tier3_metrics[organ] = {
+            'apparent_auc': cv_results['apparent_auc'],
+            'cv_auc': cv_results['cv_auc'],
+            'cv_auc_std': cv_results['cv_auc_std'],
+            'overfitting_gap': cv_results['overfitting_gap'],
+            'cv_strategy': cv_results['cv_strategy'],
+            'epv': cv_results['epv'],
+            'n_features': cv_results['n_features'],
+        }
+
+        print(f"    Added logistic predictions (apparent + CV) for {organ}")
     
+    # Attach metrics dict for downstream evaluators
+    results_df.attrs['tier3_metrics'] = tier3_metrics
+    return results_df
+
+
+def compute_untcp(results_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute uncertainty-aware NTCP (uNTCP) using inverse-variance weighting.
+
+    uNTCP combines probabilistic gEUD-based NTCP and Monte Carlo NTCP where both
+    are available; falls back to LKB probit if needed.
+    """
+    import numpy as np
+
+    # Probabilistic gEUD
+    prob_mean_col = None
+    prob_std_col = None
+    for cand in ['NTCP_Probabilistic_gEUD', 'ProbNTCP_Mean', 'Prob_gEUD_mean']:
+        if cand in results_df.columns:
+            prob_mean_col = cand
+            break
+    for cand in ['NTCP_Probabilistic_gEUD_std', 'ProbNTCP_Std', 'Prob_gEUD_std']:
+        if cand in results_df.columns:
+            prob_std_col = cand
+            break
+
+    # Monte Carlo NTCP
+    mc_mean_col = None
+    for cand in ['MC_NTCP_Mean', 'NTCP_MonteCarlo', 'MonteCarlo_NTCP_mean']:
+        if cand in results_df.columns:
+            mc_mean_col = cand
+            break
+
+    if prob_mean_col is None or mc_mean_col is None:
+        # Minimal fallback: use LKB Probit if available
+        if 'NTCP_LKB_Probit' in results_df.columns:
+            results_df['uNTCP'] = results_df['NTCP_LKB_Probit']
+            results_df['uNTCP_STD'] = np.nan
+            results_df['uNTCP_CI_L'] = np.nan
+            results_df['uNTCP_CI_U'] = np.nan
+        return results_df
+
+    mu_p = results_df[prob_mean_col].values
+    if prob_std_col is not None and prob_std_col in results_df.columns:
+        sigma_p = results_df[prob_std_col].values
+    else:
+        sigma_p = np.full_like(mu_p, np.nan, dtype=float)
+
+    # Monte Carlo: approximate SD from CI if available
+    if 'MC_NTCP_CI_L' in results_df.columns and 'MC_NTCP_CI_U' in results_df.columns:
+        mc_ci_width = (
+            results_df['MC_NTCP_CI_U'].values - results_df['MC_NTCP_CI_L'].values
+        )
+        sigma_m = np.clip(mc_ci_width / 3.92, 1e-6, None)
+    else:
+        sigma_m = np.full_like(mu_p, np.nan, dtype=float)
+
+    mu_m = results_df[mc_mean_col].values
+
+    # Inverse-variance weights
+    w_p = np.where((sigma_p > 1e-6) & ~np.isnan(sigma_p), 1.0 / sigma_p ** 2, 0.0)
+    w_m = np.where((sigma_m > 1e-6) & ~np.isnan(sigma_m), 1.0 / sigma_m ** 2, 0.0)
+    w_total = w_p + w_m
+
+    valid = w_total > 0
+    # Fallback arithmetic mean if no valid variances
+    untcp = np.where(
+        valid,
+        (mu_p * w_p + mu_m * w_m) / w_total,
+        (mu_p + mu_m) / 2.0,
+    )
+    untcp_std = np.where(valid, 1.0 / np.sqrt(w_total), np.nan)
+
+    results_df['uNTCP'] = np.clip(untcp, 0, 1)
+    results_df['uNTCP_STD'] = untcp_std
+    results_df['uNTCP_CI_L'] = np.clip(untcp - 1.96 * untcp_std, 0, 1)
+    results_df['uNTCP_CI_U'] = np.clip(untcp + 1.96 * untcp_std, 0, 1)
+
     return results_df
 
 
@@ -907,6 +1050,19 @@ def main():
         default='output',
         help='Output directory for tiered analysis results'
     )
+    parser.add_argument(
+        '--cv_strategy',
+        type=str,
+        default='auto',
+        choices=['auto', 'LOO', '5-fold'],
+        help="Override CV strategy for Tier 3 logistic models: 'auto' (default), 'LOO', or '5-fold'"
+    )
+    parser.add_argument(
+        '--include_age',
+        action='store_true',
+        default=True,
+        help='Include age/age_over_50 as covariate in Tier 3 when EPV budget allows (default: True)',
+    )
     
     args = parser.parse_args()
     
@@ -921,19 +1077,26 @@ def main():
     # Load existing results
     results_df = load_existing_results(args.code3_output)
     
-    # Add Tier 2: MLE-refitted models
+    # Add Tier 2: MLE-refitted models (including RS Poisson MLE when DVHs available)
     results_df = add_tier2_mle_predictions(
         results_df, args.dvh_dir, args.output_dir
     )
     
-    # Add Tier 3: Modern logistic regression
+    # Add Tier 3: Modern logistic regression with honest CV predictions
     results_df = add_tier3_logistic_predictions(
-        results_df, args.clinical_file, args.output_dir
+        results_df, args.clinical_file, args.output_dir,
+        cv_strategy=args.cv_strategy, include_age=args.include_age
     )
     
     # Calculate CCS for all tiers
     results_df = calculate_ccs_for_tiers(results_df)
     
+    # Compute uNTCP inside tiered analysis
+    results_df = compute_untcp(results_df)
+
+    # Deduplicate canonical NTCP columns
+    results_df = deduplicate_ntcp_columns(results_df)
+
     # Generate dose-response curves
     plot_dose_response_curves(results_df, args.output_dir)
     
@@ -942,11 +1105,94 @@ def main():
     
     # Create master Excel report
     create_master_excel_report(results_df, args.output_dir)
-    
-    # Save updated results
+
+    # Unified performance evaluation across tiers (per-organ, per-model)
+    evaluator = NTCPEvaluator()
+    all_metrics: list = []
+
+    if 'Observed_Toxicity' in results_df.columns:
+        for organ in sorted(results_df['Organ'].dropna().unique()):
+            organ_data = results_df[results_df['Organ'] == organ].copy()
+            y_true = organ_data['Observed_Toxicity'].astype(int).values
+
+            # Tier 1A – legacy fixed (literature)
+            for name, col in [
+                ('NTCP_T1A_LKB_LogLogistic', 'NTCP_LKB_LogLogit'),
+                ('NTCP_T1A_LKB_Probit', 'NTCP_LKB_Probit'),
+                ('NTCP_T1A_RS_Poisson', 'NTCP_RS_Poisson'),
+            ]:
+                if col in organ_data.columns:
+                    y_pred = organ_data[col].values
+                    m = evaluator.evaluate(
+                        y_true=y_true,
+                        y_pred_apparent=y_pred,
+                        model_name=name,
+                        tier='T1A',
+                        organ=organ,
+                    )
+                    all_metrics.append(m)
+
+            # Tier 2 – MLE
+            for name, col in [
+                ('NTCP_T2_LKB_Probit_MLE', 'NTCP_LKB_Probit_MLE'),
+                ('NTCP_T2_LKB_LogLogistic_MLE', 'NTCP_LKB_LogLogit_MLE'),
+                ('NTCP_T2_RS_Poisson_MLE', 'NTCP_RS_Poisson_MLE'),
+            ]:
+                if col in organ_data.columns:
+                    y_pred = organ_data[col].values
+                    m = evaluator.evaluate(
+                        y_true=y_true,
+                        y_pred_apparent=y_pred,
+                        model_name=name,
+                        tier='T2',
+                        organ=organ,
+                    )
+                    all_metrics.append(m)
+
+            # Tier 3 – multivariable logistic
+            if 'NTCP_MV_Logistic_apparent' in organ_data.columns:
+                y_pred_app = organ_data['NTCP_MV_Logistic_apparent'].values
+                y_pred_cv = organ_data.get('NTCP_MV_Logistic_cv', pd.Series(np.nan, index=organ_data.index)).values
+                tier3_attr = results_df.attrs.get('tier3_metrics', {}).get(organ, {})
+                m = evaluator.evaluate(
+                    y_true=y_true,
+                    y_pred_apparent=y_pred_app,
+                    model_name='NTCP_T3_MV_Logistic',
+                    tier='T3',
+                    organ=organ,
+                    y_pred_cv=y_pred_cv if not np.all(np.isnan(y_pred_cv)) else None,
+                    n_features=tier3_attr.get('n_features'),
+                    cv_strategy=tier3_attr.get('cv_strategy', 'auto'),
+                    epv=tier3_attr.get('epv'),
+                )
+                all_metrics.append(m)
+
+            # Tier 4 – ML (ANN / XGBoost / RF) if present in merged results
+            for name, col in [
+                ('NTCP_T4_ANN_apparent', 'NTCP_ML_ANN'),
+                ('NTCP_T4_XGBoost_apparent', 'NTCP_ML_XGBoost'),
+                ('NTCP_T4_RF_apparent', 'NTCP_ML_RandomForest'),
+            ]:
+                if col in organ_data.columns:
+                    y_pred = organ_data[col].values
+                    m = evaluator.evaluate(
+                        y_true=y_true,
+                        y_pred_apparent=y_pred,
+                        model_name=name,
+                        tier='T4',
+                        organ=organ,
+                    )
+                    all_metrics.append(m)
+
+    # Canonical performance summary file
     output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
+    if all_metrics:
+        perf_path = output_path / 'performance_summary_v1.1.xlsx'
+        evaluator.save_performance_table(all_metrics, str(perf_path))
+
+    # Save updated results (tiered)
     results_file = output_path / 'tiered_ntcp_results.xlsx'
     with pd.ExcelWriter(results_file, engine='openpyxl') as writer:
         results_df.to_excel(writer, sheet_name='Complete Results', index=False)
