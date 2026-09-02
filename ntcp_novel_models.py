@@ -191,9 +191,10 @@ class ProbabilisticgEUDModel:
             'assumptions': f'Parameter uncertainty: n~N({params["n"][0]:.2f}, {params["n"][1]:.2f}), TD50~N({params["TD50"][0]:.1f}, {params["TD50"][1]:.1f}) Gy, m~N({params["m"][0]:.2f}, {params["m"][1]:.2f}); Endpoint: {params["endpoint"]}'
         }
     
-    def calculate_ntcp_distribution(self, dvh, n_samples=1000):
+    def calculate_ntcp_distribution(self, dvh, n_samples=1000, random_state=None):
         """Legacy method - wrapper for calculate_ntcp() for backward compatibility"""
-        result = self.calculate_ntcp(dvh, n_samples=n_samples, return_distribution=True)
+        result = self.calculate_ntcp(dvh, n_samples=n_samples, return_distribution=True,
+                                     random_state=random_state)
         return {
             'mean': result['mean'],
             'std': result['std'],
@@ -310,9 +311,10 @@ class MonteCarloNTCPModel:
             'assumptions': f'DVH uncertainty: {self.systematic_error*100:.1f}% systematic, {self.random_error*100:.1f}% random; Parameter uncertainty: 10% relative; Organ: {self.organ}'
         }
     
-    def calculate_ntcp_with_uncertainty(self, dvh, params, n_iterations=1000):
+    def calculate_ntcp_with_uncertainty(self, dvh, params, n_iterations=1000, random_state=None):
         """Legacy method - wrapper for calculate_ntcp() for backward compatibility"""
-        result = self.calculate_ntcp(dvh, params=params, n_samples=n_iterations, return_distribution=True)
+        result = self.calculate_ntcp(dvh, params=params, n_samples=n_iterations, return_distribution=True,
+                                     random_state=random_state)
         return {
             'mean': result['mean'],
             'std': result['std'],

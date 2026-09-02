@@ -58,7 +58,30 @@ python tests/test_data/generate_synthetic_data.py
 
 This creates a 54-patient synthetic dataset in `tests/test_data/synthetic/`.
 
-## Running the Pipeline
+
+## Running the whole pipeline (the invocation that reproduces the published results)
+
+```bash
+python run_pipeline.py \
+    --input_txt_dir  <archive>/input_txtdvh \
+    --patient_data   <archive>/py_ntcpx_clinical_v1.1.1.xlsx \
+    --clinical_file  <archive>/py_ntcpx_clinical_v1.1.1.xlsx \
+    --output_dir     out_reproduction
+```
+
+The clinical workbook must be passed to **both** `--patient_data` and `--clinical_file`.
+Without `--clinical_file` the Tier-3 model silently drops the `age_over_50` indicator,
+giving 24 features, EPV 1.3 and a leave-one-out AUC of 0.536 instead of the reported 0.673.
+
+Read per-patient predictions from `code3_output/enhanced_ntcp_calculations.csv`, not from
+`code3_output/ntcp_results.xlsx`: the workbook rounds every NTCP column to four decimals,
+which creates ties and shifts AUCs.
+
+All stochastic components are seeded from v1.1.1 onward. The remaining source of
+cross-platform variation is XGBoost tree construction, which moved the apparent AUC by
+less than 0.01 between Linux and Windows.
+
+## Running the Pipeline (step by step)
 
 ### Step 0: Clinical Reconciliation
 

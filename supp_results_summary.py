@@ -654,7 +654,13 @@ class PublicationTableGenerator:
         
         # Runtime info (if available from logs)
         sys_info['Analysis_Date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        sys_info['Software'] = 'py_ntcpx v1.0'
+        # Defect C14: the version was hard-coded and drifted from VERSION.
+        try:
+            from pathlib import Path as _P
+            _v = (_P(__file__).parent / 'VERSION').read_text(encoding='utf-8').strip()
+        except Exception:
+            _v = 'unknown'
+        sys_info['Software'] = f'py_ntcpx v{_v}'
         
         # QA flags summary
         qa_summary_text = "N/A"

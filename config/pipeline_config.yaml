@@ -1,8 +1,8 @@
-# Pipeline Configuration for py_ntcpx_v1.0.0
+# Pipeline Configuration for py_ntcpx_v1.1.1
 # Publication-ready configuration
 
 pipeline:
-  version: "1.0.0"
+  version: "1.1.1"
   random_seed: 42
   
 validation:

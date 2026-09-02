@@ -547,12 +547,15 @@ def generate_lime_explanations(model, X_train, X_test, feature_names, output_dir
         else:
             X_test_array = X_test
 
+        # Defect C9: LIME's perturbation sampling was un-seeded, so the reported
+        # attribution weights moved between otherwise identical runs.
         explainer = LimeTabularExplainer(
             X_train_array,
             feature_names=feature_names,
             mode='classification',
             training_labels=None,
-            discretize_continuous=True
+            discretize_continuous=True,
+            random_state=42
         )
 
         def predict_proba_wrapper(X_input):
@@ -642,7 +645,7 @@ def main():
     run_shap_analysis(args.code3_dir, args.outdir)
 
 
-def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100):
+def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100, random_state=42):
     """
     Calculate SHAP values with bootstrapping for stability assessment
     
@@ -664,15 +667,19 @@ def calculate_bootstrap_shap(model, X, model_type='xgboost', n_bootstrap=100):
     """
     shap_values_list = []
     feature_importance_rankings = []
-    
-    print(f"      Running {n_bootstrap} bootstrap iterations...")
-    
+
+    # Defect C9: the bootstrap was drawn from the un-seeded global NumPy state, so
+    # SHAP rank means and standard deviations changed between otherwise identical runs.
+    rng = np.random.default_rng(random_state)
+
+    print(f"      Running {n_bootstrap} bootstrap iterations (seed {random_state})...")
+
     for i in range(n_bootstrap):
         if (i + 1) % 20 == 0:
             print(f"        Bootstrap {i+1}/{n_bootstrap}...")
-        
+
         # Bootstrap sample
-        indices = np.random.choice(len(X), size=len(X), replace=True)
+        indices = rng.integers(0, len(X), size=len(X))
         X_boot = X.iloc[indices]
         
         try:

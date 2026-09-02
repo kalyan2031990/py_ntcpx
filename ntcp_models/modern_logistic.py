@@ -475,10 +475,14 @@ class ModernLogisticNTCP:
 
         if cv_strategy == 'LOO':
             loo = LeaveOneOut()
-            for train_idx, test_idx in loo.split(X_scaled):
+            for train_idx, test_idx in loo.split(X):
+                # C1 fix: fit the scaler inside the fold, on training data only
+                fold_scaler = StandardScaler()
+                X_tr = fold_scaler.fit_transform(X[train_idx])
+                X_te = fold_scaler.transform(X[test_idx])
                 m = clone(model_template)
-                m.fit(X_scaled[train_idx], y[train_idx])
-                cv_preds[test_idx] = m.predict_proba(X_scaled[test_idx])[:, 1]
+                m.fit(X_tr, y[train_idx])
+                cv_preds[test_idx] = m.predict_proba(X_te)[:, 1]
             cv_auc = roc_auc_score(y, cv_preds)
             cv_auc_std = np.nan
             loo_auc = cv_auc
@@ -486,10 +490,14 @@ class ModernLogisticNTCP:
         else:
             skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
             fold_aucs = []
-            for train_idx, test_idx in skf.split(X_scaled, y):
+            for train_idx, test_idx in skf.split(X, y):
+                # C1 fix: fit the scaler inside the fold, on training data only
+                fold_scaler = StandardScaler()
+                X_tr = fold_scaler.fit_transform(X[train_idx])
+                X_te = fold_scaler.transform(X[test_idx])
                 m = clone(model_template)
-                m.fit(X_scaled[train_idx], y[train_idx])
-                fold_pred = m.predict_proba(X_scaled[test_idx])[:, 1]
+                m.fit(X_tr, y[train_idx])
+                fold_pred = m.predict_proba(X_te)[:, 1]
                 cv_preds[test_idx] = fold_pred
                 try:
                     fold_auc = roc_auc_score(y[test_idx], fold_pred)

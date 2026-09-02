@@ -859,6 +859,14 @@ Software: py_ntcpx_v1.0.0
     input_txt_dir = Path(args.input_txt_dir).expanduser().resolve() if args.input_txt_dir else None
     patient_data_file = Path(args.patient_data).expanduser().resolve() if args.patient_data else None
     clinical_file = Path(args.clinical_file).expanduser().resolve() if args.clinical_file else None
+
+    # Defect C15: omitting --clinical_file silently dropped the age indicator from the
+    # Tier-3 feature set, changing the reported model. The patient-data workbook carries
+    # the clinical covariates, so fall back to it rather than failing quietly.
+    if clinical_file is None and patient_data_file is not None and patient_data_file.exists():
+        clinical_file = patient_data_file
+        logger.info(f"[OK] --clinical_file not given; using --patient_data for clinical "
+                    f"covariates: {clinical_file}")
     
     # Validate inputs (skip if resuming from later steps)
     if not args.resume_from or args.resume_from == 'step1':

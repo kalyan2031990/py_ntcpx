@@ -70,7 +70,12 @@ def load_existing_results(code3_output_dir):
     
     # Try to find results file
     results_file = None
-    for pattern in ['ntcp_results.xlsx', 'enhanced_ntcp_calculations.csv', '*.xlsx']:
+    # C8 fix: prefer the full-precision CSV. `ntcp_results.xlsx` stores NTCP
+    # predictions rounded to 4 decimals (code3, "Round numerical columns"),
+    # which manufactures ties and shifts every AUC computed downstream — it is
+    # why the LKB probit reads 0.5407 in the summary tables and 0.5358 in the
+    # per-patient data.
+    for pattern in ['enhanced_ntcp_calculations.csv', 'ntcp_results.xlsx', '*.xlsx']:
         candidates = list(code3_path.glob(pattern))
         if candidates:
             results_file = candidates[0]
@@ -401,7 +406,7 @@ def compute_untcp(results_df: pd.DataFrame) -> pd.DataFrame:
     return results_df
 
 
-def calculate_ccs_for_tiers(results_df):
+def calculate_ccs_for_tiers(results_df, output_dir='.'):
     """
     Calculate CCS (Cohort Consistency Score) for all tiers
     
@@ -461,13 +466,33 @@ def calculate_ccs_for_tiers(results_df):
             except:
                 ccs_values.append(np.nan)
         
-        # Add CCS columns for different tiers
-        results_df.loc[organ_indices, 'CCS_QUANTEC'] = ccs_values
-        results_df.loc[organ_indices, 'CCS_MLE'] = ccs_values
-        results_df.loc[organ_indices, 'CCS_Logistic'] = ccs_values
-        results_df.loc[organ_indices, 'CCS_ML'] = ccs_values  # For ML models
-        
-        print(f"    Added CCS for {organ}")
+        # Defect C13: four "tier-specific" columns were written from one vector, and
+        # the manuscript described them as computed against tier-specific reference
+        # populations. CCS depends only on the patient's dosimetric profile and the
+        # reference cohort, not on which NTCP model is being evaluated, so there is one
+        # value per patient. A single column is emitted and the specification recorded.
+        results_df.loc[organ_indices, 'CCS_cohort'] = ccs_values
+
+        try:
+            import json as _json
+            from pathlib import Path as _P
+            _P(output_dir).mkdir(parents=True, exist_ok=True)
+            with open(_P(output_dir) / 'ccs_specification.json', 'w', encoding='utf-8') as _f:
+                _json.dump({
+                    'features': available_features,
+                    'n_features': len(available_features),
+                    'reference_cohort': 'the analysed cohort itself (in-sample distance)',
+                    'transform': 'exp(-0.5 * squared Mahalanobis distance)',
+                    'covariance': 'sample covariance + 1e-6 on the diagonal, Moore-Penrose pseudo-inverse',
+                    'threshold': float(getattr(ccs_calculator, 'ccs_threshold', float('nan'))),
+                    'threshold_source': ('adaptive software heuristic keyed to cohort size '
+                                         '(0.0 for n<30, 0.1 for 30<=n<100, 0.2 for n>=100); '
+                                         'not derived from published data'),
+                }, _f, indent=2)
+        except Exception as _e:
+            print(f"    Warning: could not write ccs_specification.json: {_e}")
+
+        print(f"    Added CCS for {organ} using {len(available_features)} features: {available_features}")
     
     return results_df
 
@@ -813,12 +838,21 @@ def create_ml_qa_validation(results_df, output_dir, code3_output_dir=None):
                             lambda r: (r['Apparent_AUC'] - r['CV_AUC_mean']) if pd.notna(r.get('CV_AUC_mean')) else np.nan,
                             axis=1
                         )
-                    # Flag high overfitting (gap > 0.1)
+                    # Overfitting severity — must use the same four-level scheme as
+                    # code4_ntcp_output_QA_reporter.flag_overfitting. Before v1.1.1 this
+                    # emitted a binary 'High' for any gap > 0.1, so the released workbook
+                    # graded the random forest (gap 0.590) the same as a mild 0.11 gap and
+                    # never printed CRITICAL. (defect C16)
                     if 'Overfitting_Gap' in qa_df.columns:
-                        qa_df['Overfitting_Flag'] = qa_df.apply(
-                            lambda r: 'High' if pd.notna(r.get('Overfitting_Gap')) and r['Overfitting_Gap'] > 0.1 else '',
-                            axis=1
-                        )
+                        from code4_ntcp_output_QA_reporter import flag_overfitting
+
+                        def _severity(r):
+                            cv = r.get('CV_AUC_mean')
+                            if pd.isna(r.get('Overfitting_Gap')) or pd.isna(cv):
+                                return ''
+                            return flag_overfitting(r['Apparent_AUC'], cv)[1]
+
+                        qa_df['Overfitting_Flag'] = qa_df.apply(_severity, axis=1)
             except Exception as e:
                 print(f"  Warning: Could not merge ml_cv_metrics.xlsx: {e}")
         if 'Overfitting_Flag' not in qa_df.columns:
@@ -1002,10 +1036,7 @@ def create_master_excel_report(results_df, output_dir):
             'MC_NTCP_Mean',
             'uNTCP',
             # CCS per tier
-            'CCS_QUANTEC',
-            'CCS_MLE',
-            'CCS_Logistic',
-            'CCS_ML',
+            'CCS_cohort',
         ]
         clean_pred_cols = [c for c in preferred_pred_cols if c in results_df.columns]
 
@@ -1089,7 +1120,7 @@ def main():
     )
     
     # Calculate CCS for all tiers
-    results_df = calculate_ccs_for_tiers(results_df)
+    results_df = calculate_ccs_for_tiers(results_df, output_dir=args.output_dir)
     
     # Compute uNTCP inside tiered analysis
     results_df = compute_untcp(results_df)

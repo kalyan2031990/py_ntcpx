@@ -969,6 +969,14 @@ class MachineLearningModels:
                 
                 fold += 1
             
+            # C2 fix: refit each model on the full cohort so that the reported
+            # "apparent" performance is a genuine apparent (resubstitution) figure.
+            # Previously fold 0's model was applied to all patients, which is neither
+            # apparent nor out-of-fold.
+            full_fit = self._train_and_evaluate_fold(
+                X_all, X_all, y_all, y_all, feature_cols, organ, use_v2_components
+            )
+
             # Aggregate results
             results = {}
             if ann_cv_scores:
@@ -976,7 +984,7 @@ class MachineLearningModels:
                 std_ann_auc = np.std(ann_cv_scores)
                 print(f"     ANN - CV AUC: {mean_ann_auc:.3f} ± {std_ann_auc:.3f} (5-fold)")
                 results['ANN'] = {
-                    'model': ann_models[0],  # Use first fold's model for prediction
+                    'model': (full_fit.get('ANN') or {}).get('model', ann_models[0]),  # Use first fold's model for prediction
                     'cv_AUC_mean': mean_ann_auc,
                     'cv_AUC_std': std_ann_auc,
                     'cv_AUC_scores': ann_cv_scores,
@@ -991,7 +999,7 @@ class MachineLearningModels:
                 std_xgb_auc = np.std(xgb_cv_scores)
                 print(f"     XGBoost - CV AUC: {mean_xgb_auc:.3f} ± {std_xgb_auc:.3f} (5-fold)")
                 results['XGBoost'] = {
-                    'model': xgb_models[0],  # Use first fold's model for prediction
+                    'model': (full_fit.get('XGBoost') or {}).get('model', xgb_models[0]),  # Use first fold's model for prediction
                     'cv_AUC_mean': mean_xgb_auc,
                     'cv_AUC_std': std_xgb_auc,
                     'cv_AUC_scores': xgb_cv_scores,
@@ -1006,7 +1014,7 @@ class MachineLearningModels:
                 std_rf_auc = np.std(rf_cv_scores)
                 print(f"     RandomForest - CV AUC: {mean_rf_auc:.3f} ± {std_rf_auc:.3f} (5-fold)")
                 results['RandomForest'] = {
-                    'model': rf_models[0],
+                    'model': (full_fit.get('RandomForest') or {}).get('model', rf_models[0]),
                     'cv_AUC_mean': mean_rf_auc,
                     'cv_AUC_std': std_rf_auc,
                     'cv_AUC_scores': rf_cv_scores,
@@ -3047,6 +3055,12 @@ def create_comprehensive_excel(results_df, output_dir):
     print(f" Comprehensive Excel file created: {excel_file}")
     return excel_file
 
+# Seed for the probabilistic-gEUD and Monte-Carlo NTCP samplers (defect C7).
+# Without this both samplers draw from the un-seeded global NumPy state, making
+# uNTCP and its 95% band irreproducible between runs.
+MC_RANDOM_SEED = 42
+
+
 def _get_single_column(df, name):
     """Return a single Series even if Excel had duplicate columns."""
     cols = [c for c in df.columns if c.lower() == name.lower()]
@@ -3340,7 +3354,7 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
         if ProbabilisticgEUDModel is not None:
             try:
                 prob_geud_model = ProbabilisticgEUDModel(organ)
-                prob_ntcp = prob_geud_model.calculate_ntcp_distribution(dvh)
+                prob_ntcp = prob_geud_model.calculate_ntcp_distribution(dvh, random_state=MC_RANDOM_SEED)
                 if prob_ntcp:
                     result_row['ProbNTCP_Mean'] = prob_ntcp['mean']
                     result_row['ProbNTCP_CI_L'] = prob_ntcp['ci_lower']
@@ -3377,7 +3391,7 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     'TD50': lit_params['LKB_Probit'].get('TD50', 50.0),
                     'm': lit_params['LKB_Probit'].get('m', 0.2)
                 }
-                mc_ntcp = mc_model.calculate_ntcp_with_uncertainty(dvh, mc_params)
+                mc_ntcp = mc_model.calculate_ntcp_with_uncertainty(dvh, mc_params, random_state=MC_RANDOM_SEED)
                 if mc_ntcp:
                     result_row['MC_NTCP_Mean'] = mc_ntcp['mean']
                     result_row['MC_NTCP_CI_L'] = mc_ntcp['ci_lower']
@@ -3685,9 +3699,12 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                             
                             # Add CCS to results DataFrame
                             if len(ccs_values) == len(organ_indices):
-                                results_df.loc[organ_indices, 'CCS'] = ccs_values
-                                results_df.loc[organ_indices, 'CCS_Warning'] = ccs_warnings
-                                results_df.loc[organ_indices, 'CCS_Warning_Flag'] = ccs_warning_flags
+                                # Defect C13: this CCS is computed on the Tier-4 ML feature subset, not on the
+                                # DVH feature set used for the reported CCS. The two differ by up to 0.72,
+                                # so the column is named distinctly.
+                                results_df.loc[organ_indices, 'CCS_ml_features'] = ccs_values
+                                results_df.loc[organ_indices, 'CCS_ml_features_Warning'] = ccs_warnings
+                                results_df.loc[organ_indices, 'CCS_ml_features_Warning_Flag'] = ccs_warning_flags
                                 
                                 # Log warning count
                                 n_warnings = sum(ccs_warning_flags)
@@ -4162,9 +4179,11 @@ def get_data_quality_rating(n_patients, n_events):
     elif n_patients < 30:
         return 'Good (≥10 events, ML possible)'
     elif n_patients >= 50 and n_events >= 15:
-        return 'Excellent (≥15 events, ≥50 patients, ML reliable)'
+        # Defect C12: this previously read "ML reliable". Event count alone does not
+        # establish reliability; events per variable does, and it is not known here.
+        return 'Adequate volume (>=15 events, >=50 patients) - reliability depends on events per variable'
     else:
-        return 'Very Good (adequate for ML)'
+        return 'Limited volume - interpret with caution'
 
 def get_clinical_recommendation(best_auc, n_events, ml_models):
     """Enhanced clinical recommendation including ML considerations"""
@@ -4174,19 +4193,25 @@ def get_clinical_recommendation(best_auc, n_events, ml_models):
     
     auc_val = float(best_auc) if isinstance(best_auc, str) else best_auc
     
+    # Defect C11: this function is passed the best *apparent* AUC, so an overfitted
+    # model scored on its own training data was reported as "highly suitable for
+    # clinical use". No apparent figure can support a statement about clinical use.
     if auc_val < 0.6:
-        return 'Poor discrimination - not recommended for clinical use'
+        base_rec = 'Weak apparent discrimination'
     elif auc_val < 0.7:
-        base_rec = 'Moderate discrimination - use with caution'
+        base_rec = 'Moderate apparent discrimination'
     elif auc_val < 0.8:
-        base_rec = 'Good discrimination - suitable for clinical decision support'
+        base_rec = 'Strong apparent discrimination'
     else:
-        base_rec = 'Excellent discrimination - highly suitable for clinical use'
-    
-    # Add ML-specific recommendations
+        base_rec = 'Very strong apparent discrimination - check the optimism estimate first'
+
+    base_rec += ('; apparent performance only. Out-of-sample validation is required '
+                 'before any clinical interpretation, and this software makes no '
+                 'clinical-use recommendation.')
+
     if ml_models:
-        base_rec += '; ML models available for enhanced predictions'
-    
+        base_rec += ' Machine-learning models were fitted; see their overfitting grades.'
+
     return base_rec
 
 def main():

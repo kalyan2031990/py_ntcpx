@@ -322,7 +322,19 @@ def main():
                 n_patients = n_rows
 
             if "Observed_Toxicity" in sub.columns:
-                events = int(pd.to_numeric(sub["Observed_Toxicity"], errors="coerce").fillna(0).sum())
+                # Defect C10: `sub` concatenates several result files, so each patient
+                # appears more than once. Summing the outcome over all rows counted
+                # every event once per source file and produced event rates above 100%.
+                id_col = next((c for c in ("PrimaryPatientID", "PatientID", "AnonPatientID")
+                               if c in sub.columns), None)
+                if id_col is not None:
+                    per_patient = (sub.assign(_k=sub[id_col].astype(str).str.strip())
+                                      .drop_duplicates("_k"))
+                    events = int(pd.to_numeric(per_patient["Observed_Toxicity"],
+                                               errors="coerce").fillna(0).sum())
+                else:
+                    events = int(pd.to_numeric(sub["Observed_Toxicity"],
+                                               errors="coerce").fillna(0).sum())
             else:
                 events = np.nan
             event_rate = (events / n_patients * 100 if n_patients > 0 and not np.isnan(events) else np.nan)
