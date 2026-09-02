@@ -24,6 +24,8 @@ Version: 1.1-patched
 
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
@@ -1087,8 +1089,8 @@ Degrees of freedom: {chi_sq['degrees_of_freedom']}
                 toxicity_data = self.merged_data[self.merged_data['Observed_Toxicity'] == 1][factor].dropna()
                 no_toxicity_data = self.merged_data[self.merged_data['Observed_Toxicity'] == 0][factor].dropna()
 
-                ax2.boxplot([no_toxicity_data, toxicity_data], 
-                           labels=['No Toxicity', 'Toxicity'],
+                ax2.boxplot([no_toxicity_data, toxicity_data],
+                           tick_labels=['No Toxicity', 'Toxicity'],
                            patch_artist=True,
                            boxprops=dict(facecolor=COLORS['secondary'], alpha=0.7),
                            medianprops=dict(color='black', linewidth=2))
@@ -1589,6 +1591,7 @@ def main():
         import traceback
         print("\nFull error traceback:")
         traceback.print_exc()
+        raise
 
 if __name__ == "__main__":
     main()

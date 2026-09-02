@@ -4,6 +4,8 @@ Publication-ready figure generation (600 DPI)
 IJROBP-compliant figures with proper styling
 """
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

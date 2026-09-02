@@ -14,6 +14,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 from sklearn.metrics import roc_auc_score, brier_score_loss
 try:
     from sklearn.calibration import calibration_curve
@@ -452,20 +453,44 @@ class ModernLogisticNTCP:
         from sklearn.model_selection import LeaveOneOut, StratifiedKFold
         from sklearn.base import clone
 
-        X, y, feature_names = self.prepare_features(organ_data, clinical_data)
+        # Prespecified, EPV-compliant Tier-3 model.  The former implementation
+        # passed 24 correlated DVH variables into LOO-CV, scaled the complete
+        # cohort before splitting, and failed to join age when the clinical key
+        # was named ``patient_id``.  For this small cohort, use the clinically
+        # interpretable two-predictor model (age + mean parotid dose).
+        feature_df = pd.DataFrame(index=organ_data.index)
+        if 'mean_dose' not in organ_data.columns:
+            raise ValueError('Tier3 Logistic requires mean_dose')
+        feature_df['mean_dose'] = pd.to_numeric(organ_data['mean_dose'], errors='coerce')
+
+        if self.include_age and clinical_data is not None and 'age' in clinical_data.columns:
+            organ_key = next((c for c in ['PrimaryPatientID', 'patient_id', 'PatientID'] if c in organ_data.columns), None)
+            clinical_key = next((c for c in ['PrimaryPatientID', 'patient_id', 'PatientID'] if c in clinical_data.columns), None)
+            if organ_key and clinical_key:
+                age_map = (
+                    clinical_data.assign(_join_key=clinical_data[clinical_key].astype(str).str.strip())
+                    .drop_duplicates('_join_key')
+                    .set_index('_join_key')['age']
+                )
+                feature_df['age'] = (
+                    organ_data[organ_key].astype(str).str.strip().map(age_map)
+                )
+
+        feature_names = ['age', 'mean_dose'] if 'age' in feature_df.columns else ['mean_dose']
+        X_df = feature_df[feature_names].apply(pd.to_numeric, errors='coerce')
+        X_df = X_df.fillna(X_df.median())
+        X = X_df.to_numpy(dtype=float)
+        y = organ_data['Observed_Toxicity'].values.astype(int)
         n = len(X)
         n_events = int(y.sum())
 
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        model_template = LogisticRegression(
-            C=1.0,
-            penalty='l2',
-            max_iter=1000,
-            random_state=self.random_state,
-            solver='lbfgs'
-        )
+        model_template = Pipeline([
+            ('scaler', StandardScaler()),
+            ('logistic', LogisticRegression(
+                C=1.0, penalty='l2', max_iter=1000,
+                random_state=self.random_state, solver='lbfgs'
+            )),
+        ])
 
         # Choose CV strategy
         if cv_strategy == 'auto':
@@ -475,10 +500,10 @@ class ModernLogisticNTCP:
 
         if cv_strategy == 'LOO':
             loo = LeaveOneOut()
-            for train_idx, test_idx in loo.split(X_scaled):
+            for train_idx, test_idx in loo.split(X):
                 m = clone(model_template)
-                m.fit(X_scaled[train_idx], y[train_idx])
-                cv_preds[test_idx] = m.predict_proba(X_scaled[test_idx])[:, 1]
+                m.fit(X[train_idx], y[train_idx])
+                cv_preds[test_idx] = m.predict_proba(X[test_idx])[:, 1]
             cv_auc = roc_auc_score(y, cv_preds)
             cv_auc_std = np.nan
             loo_auc = cv_auc
@@ -486,10 +511,10 @@ class ModernLogisticNTCP:
         else:
             skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=self.random_state)
             fold_aucs = []
-            for train_idx, test_idx in skf.split(X_scaled, y):
+            for train_idx, test_idx in skf.split(X, y):
                 m = clone(model_template)
-                m.fit(X_scaled[train_idx], y[train_idx])
-                fold_pred = m.predict_proba(X_scaled[test_idx])[:, 1]
+                m.fit(X[train_idx], y[train_idx])
+                fold_pred = m.predict_proba(X[test_idx])[:, 1]
                 cv_preds[test_idx] = fold_pred
                 try:
                     fold_auc = roc_auc_score(y[test_idx], fold_pred)
@@ -505,8 +530,8 @@ class ModernLogisticNTCP:
 
         # Apparent AUC (full model)
         full_model = clone(model_template)
-        full_model.fit(X_scaled, y)
-        apparent_preds = full_model.predict_proba(X_scaled)[:, 1]
+        full_model.fit(X, y)
+        apparent_preds = full_model.predict_proba(X)[:, 1]
         try:
             apparent_auc = roc_auc_score(y, apparent_preds)
         except Exception:

@@ -50,6 +50,8 @@ except ImportError:
     CohortConsistencyScore = None
 
 # Import plotting utilities
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.interpolate import interp1d
@@ -379,19 +381,36 @@ def compute_untcp(results_df: pd.DataFrame) -> pd.DataFrame:
 
     mu_m = results_df[mc_mean_col].values
 
-    # Inverse-variance weights
-    w_p = np.where((sigma_p > 1e-6) & ~np.isnan(sigma_p), 1.0 / sigma_p ** 2, 0.0)
-    w_m = np.where((sigma_m > 1e-6) & ~np.isnan(sigma_m), 1.0 / sigma_m ** 2, 0.0)
+    # Inverse-variance weights. Build the arrays by masked assignment: using
+    # np.where here still evaluates 1/sigma**2 for zero/NaN values and can
+    # propagate NaNs through the weighted numerator (NaN * 0 is NaN).
+    valid_p = np.isfinite(mu_p) & np.isfinite(sigma_p) & (sigma_p > 1e-6)
+    valid_m = np.isfinite(mu_m) & np.isfinite(sigma_m) & (sigma_m > 1e-6)
+    w_p = np.zeros_like(mu_p, dtype=float)
+    w_m = np.zeros_like(mu_m, dtype=float)
+    w_p[valid_p] = 1.0 / sigma_p[valid_p] ** 2
+    w_m[valid_m] = 1.0 / sigma_m[valid_m] ** 2
     w_total = w_p + w_m
 
     valid = w_total > 0
-    # Fallback arithmetic mean if no valid variances
-    untcp = np.where(
-        valid,
-        (mu_p * w_p + mu_m * w_m) / w_total,
-        (mu_p + mu_m) / 2.0,
+    untcp = np.full_like(mu_p, np.nan, dtype=float)
+    untcp_std = np.full_like(mu_p, np.nan, dtype=float)
+    weighted_numerator = (
+        np.where(valid_p, mu_p, 0.0) * w_p
+        + np.where(valid_m, mu_m, 0.0) * w_m
     )
-    untcp_std = np.where(valid, 1.0 / np.sqrt(w_total), np.nan)
+    untcp[valid] = weighted_numerator[valid] / w_total[valid]
+    untcp_std[valid] = 1.0 / np.sqrt(w_total[valid])
+
+    # If neither variance is usable, retain a finite component rather than
+    # silently returning NaN; if both means are finite, use their average.
+    no_weight = ~valid
+    both_means = no_weight & np.isfinite(mu_p) & np.isfinite(mu_m)
+    only_p = no_weight & np.isfinite(mu_p) & ~np.isfinite(mu_m)
+    only_m = no_weight & ~np.isfinite(mu_p) & np.isfinite(mu_m)
+    untcp[both_means] = (mu_p[both_means] + mu_m[both_means]) / 2.0
+    untcp[only_p] = mu_p[only_p]
+    untcp[only_m] = mu_m[only_m]
 
     results_df['uNTCP'] = np.clip(untcp, 0, 1)
     results_df['uNTCP_STD'] = untcp_std
@@ -801,16 +820,19 @@ def create_ml_qa_validation(results_df, output_dir, code3_output_dir=None):
         if cv_file and cv_file.exists():
             try:
                 cv_df = pd.read_excel(cv_file)
-                merge_cols = [c for c in ['CV_AUC_mean', 'CV_AUC_std', 'Test_AUC', 'Constant_Predictor'] if c in cv_df.columns]
+                merge_cols = [c for c in ['CV_AUC_mean', 'CV_AUC_std', 'CV_AUC_pooled', 'Test_AUC', 'Constant_Predictor'] if c in cv_df.columns]
                 if merge_cols:
                     qa_df = qa_df.merge(
                         cv_df[['Organ', 'Model'] + merge_cols],
                         on=['Organ', 'Model'],
                         how='left'
                     )
-                    if 'CV_AUC_mean' in qa_df.columns:
+                    if 'CV_AUC_pooled' in qa_df.columns or 'CV_AUC_mean' in qa_df.columns:
                         qa_df['Overfitting_Gap'] = qa_df.apply(
-                            lambda r: (r['Apparent_AUC'] - r['CV_AUC_mean']) if pd.notna(r.get('CV_AUC_mean')) else np.nan,
+                            lambda r: (
+                                r['Apparent_AUC']
+                                - (r['CV_AUC_pooled'] if pd.notna(r.get('CV_AUC_pooled')) else r.get('CV_AUC_mean'))
+                            ) if pd.notna(r.get('CV_AUC_pooled')) or pd.notna(r.get('CV_AUC_mean')) else np.nan,
                             axis=1
                         )
                     # Flag high overfitting (gap > 0.1)

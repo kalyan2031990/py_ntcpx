@@ -50,11 +50,6 @@ def check_epv(
     return epv
 
 
-from .legacy_fixed import LegacyFixedNTCP  # noqa: E402
-from .legacy_mle import LegacyMLENTCP  # noqa: E402
-from .modern_logistic import ModernLogisticNTCP  # noqa: E402
-
-
 __all__ = [
     'LegacyFixedNTCP',
     'LegacyMLENTCP',
@@ -62,4 +57,23 @@ __all__ = [
     'EPVError',
     'check_epv',
 ]
+
+
+def __getattr__(name):
+    """Lazily import model classes to avoid a circular import with code3.
+
+    The ML helpers only need ``check_epv`` and ``EPVError``.  Eagerly importing
+    the legacy wrappers here caused those wrappers to import code3 while code3
+    was still importing the ML helpers, disabling the v1.1.0 safety components.
+    """
+    if name == 'LegacyFixedNTCP':
+        from .legacy_fixed import LegacyFixedNTCP
+        return LegacyFixedNTCP
+    if name == 'LegacyMLENTCP':
+        from .legacy_mle import LegacyMLENTCP
+        return LegacyMLENTCP
+    if name == 'ModernLogisticNTCP':
+        from .modern_logistic import ModernLogisticNTCP
+        return ModernLogisticNTCP
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

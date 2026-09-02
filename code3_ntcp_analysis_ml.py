@@ -16,6 +16,8 @@ Version: 3.0.1
 
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
@@ -407,8 +409,10 @@ class NTCPCalculator:
     
     def convert_to_eqd2(self, dose, alpha_beta_ratio, dose_per_fraction, n_fractions=None):
         """Convert physical dose to EQD2"""
-        if np.isnan(dose) or dose <= 0:
+        if np.isnan(dose) or dose < 0:
             return np.nan
+        if dose == 0:
+            return 0.0
             
         if dose_per_fraction is None:
             if n_fractions is not None:
@@ -776,7 +780,8 @@ class MachineLearningModels:
                 auc_ann = auc(fpr, tpr)
                 fold_results['ANN'] = {
                     'model': ann_model,
-                    'test_AUC': auc_ann
+                    'test_AUC': auc_ann,
+                    'test_predictions': y_pred_ann,
                 }
             except Exception as e:
                 fold_results['ANN'] = None
@@ -807,7 +812,8 @@ class MachineLearningModels:
                     auc_xgb = auc(fpr, tpr)
                     fold_results['XGBoost'] = {
                         'model': xgb_model,
-                        'test_AUC': auc_xgb
+                        'test_AUC': auc_xgb,
+                        'test_predictions': y_pred_xgb,
                     }
                 except Exception as e:
                     fold_results['XGBoost'] = None
@@ -829,7 +835,8 @@ class MachineLearningModels:
             auc_rf = auc(fpr_rf, tpr_rf)
             fold_results['RandomForest'] = {
                 'model': rf_model,
-                'test_AUC': auc_rf
+                'test_AUC': auc_rf,
+                'test_predictions': y_pred_rf,
             }
         except Exception:
             fold_results['RandomForest'] = None
@@ -941,6 +948,9 @@ class MachineLearningModels:
             ann_models = []
             xgb_models = []
             rf_models = []
+            ann_oof = np.full(n_samples_all, np.nan, dtype=float)
+            xgb_oof = np.full(n_samples_all, np.nan, dtype=float)
+            rf_oof = np.full(n_samples_all, np.nan, dtype=float)
             
             print(f"     Starting 5-fold cross-validation...")
             fold = 1
@@ -958,28 +968,48 @@ class MachineLearningModels:
                 if 'ANN' in fold_results and fold_results['ANN'] is not None:
                     ann_cv_scores.append(fold_results['ANN']['test_AUC'])
                     ann_models.append(fold_results['ANN']['model'])
+                    ann_oof[test_idx] = fold_results['ANN']['test_predictions']
                 
                 if 'XGBoost' in fold_results and fold_results['XGBoost'] is not None:
                     xgb_cv_scores.append(fold_results['XGBoost']['test_AUC'])
                     xgb_models.append(fold_results['XGBoost']['model'])
+                    xgb_oof[test_idx] = fold_results['XGBoost']['test_predictions']
 
                 if 'RandomForest' in fold_results and fold_results['RandomForest'] is not None:
                     rf_cv_scores.append(fold_results['RandomForest']['test_AUC'])
                     rf_models.append(fold_results['RandomForest']['model'])
+                    rf_oof[test_idx] = fold_results['RandomForest']['test_predictions']
                 
                 fold += 1
             
-            # Aggregate results
+            # Fit final models on the full cohort for apparent predictions.
+            # The earlier implementation reused the first fold's model for all
+            # patients, mixing training and held-out rows in an uninterpretable
+            # prediction column.
+            final_ann = self.train_ann_model(X_all, y_all, organ)
+            final_xgb = self.train_xgboost_model(X_all, y_all, organ)
+            final_rf = RandomForestClassifier(
+                n_estimators=100, max_depth=3, min_samples_split=4,
+                min_samples_leaf=2, max_features='sqrt',
+                class_weight='balanced_subsample', random_state=self.random_state,
+            )
+            final_rf.fit(X_all, y_all)
+
+            # Aggregate results. Pooled OOF AUC is the primary validation
+            # estimate; the mean and SD of fold AUCs remain for compatibility.
             results = {}
             if ann_cv_scores:
                 mean_ann_auc = np.mean(ann_cv_scores)
                 std_ann_auc = np.std(ann_cv_scores)
+                pooled_ann_auc = auc(*roc_curve(y_all[np.isfinite(ann_oof)], ann_oof[np.isfinite(ann_oof)])[:2])
                 print(f"     ANN - CV AUC: {mean_ann_auc:.3f} ± {std_ann_auc:.3f} (5-fold)")
                 results['ANN'] = {
-                    'model': ann_models[0],  # Use first fold's model for prediction
+                    'model': final_ann,
                     'cv_AUC_mean': mean_ann_auc,
                     'cv_AUC_std': std_ann_auc,
+                    'cv_AUC_pooled': pooled_ann_auc,
                     'cv_AUC_scores': ann_cv_scores,
+                    'oof_predictions': ann_oof,
                     'n_samples': n_samples_all,
                     'n_events': int(n_events_all),
                     'feature_names': feature_cols,
@@ -989,12 +1019,15 @@ class MachineLearningModels:
             if xgb_cv_scores:
                 mean_xgb_auc = np.mean(xgb_cv_scores)
                 std_xgb_auc = np.std(xgb_cv_scores)
+                pooled_xgb_auc = auc(*roc_curve(y_all[np.isfinite(xgb_oof)], xgb_oof[np.isfinite(xgb_oof)])[:2])
                 print(f"     XGBoost - CV AUC: {mean_xgb_auc:.3f} ± {std_xgb_auc:.3f} (5-fold)")
                 results['XGBoost'] = {
-                    'model': xgb_models[0],  # Use first fold's model for prediction
+                    'model': final_xgb,
                     'cv_AUC_mean': mean_xgb_auc,
                     'cv_AUC_std': std_xgb_auc,
+                    'cv_AUC_pooled': pooled_xgb_auc,
                     'cv_AUC_scores': xgb_cv_scores,
+                    'oof_predictions': xgb_oof,
                     'n_samples': n_samples_all,
                     'n_events': int(n_events_all),
                     'feature_names': feature_cols,
@@ -1004,12 +1037,15 @@ class MachineLearningModels:
             if rf_cv_scores:
                 mean_rf_auc = np.mean(rf_cv_scores)
                 std_rf_auc = np.std(rf_cv_scores)
+                pooled_rf_auc = auc(*roc_curve(y_all[np.isfinite(rf_oof)], rf_oof[np.isfinite(rf_oof)])[:2])
                 print(f"     RandomForest - CV AUC: {mean_rf_auc:.3f} ± {std_rf_auc:.3f} (5-fold)")
                 results['RandomForest'] = {
-                    'model': rf_models[0],
+                    'model': final_rf,
                     'cv_AUC_mean': mean_rf_auc,
                     'cv_AUC_std': std_rf_auc,
+                    'cv_AUC_pooled': pooled_rf_auc,
                     'cv_AUC_scores': rf_cv_scores,
+                    'oof_predictions': rf_oof,
                     'n_samples': n_samples_all,
                     'n_events': int(n_events_all),
                     'feature_names': feature_cols,
@@ -3685,6 +3721,20 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                             
                             # Add CCS to results DataFrame
                             if len(ccs_values) == len(organ_indices):
+                                if 'CCS_Warning' not in results_df.columns:
+                                    results_df['CCS_Warning'] = pd.Series(
+                                        [None] * len(results_df), index=results_df.index, dtype='object'
+                                    )
+                                else:
+                                    results_df['CCS_Warning'] = results_df['CCS_Warning'].astype('object')
+                                if 'CCS_Warning_Flag' not in results_df.columns:
+                                    results_df['CCS_Warning_Flag'] = pd.Series(
+                                        False, index=results_df.index, dtype='bool'
+                                    )
+                                else:
+                                    results_df['CCS_Warning_Flag'] = (
+                                        results_df['CCS_Warning_Flag'].fillna(False).astype(bool)
+                                    )
                                 results_df.loc[organ_indices, 'CCS'] = ccs_values
                                 results_df.loc[organ_indices, 'CCS_Warning'] = ccs_warnings
                                 results_df.loc[organ_indices, 'CCS_Warning_Flag'] = ccs_warning_flags
@@ -3796,6 +3846,7 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
     try:
         from sklearn.metrics import roc_curve, auc
         cv_rows = []
+        oof_frames = []
         model_to_col = {'ANN': 'NTCP_ML_ANN', 'XGBoost': 'NTCP_ML_XGBoost', 'RandomForest': 'NTCP_ML_RandomForest'}
         for organ in sorted(ml_models.models.keys()):
             organ_models = ml_models.models[organ]
@@ -3807,9 +3858,10 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                 info = organ_models[model_name]
                 cv_mean = info.get('cv_AUC_mean')
                 cv_std = info.get('cv_AUC_std')
+                cv_pooled = info.get('cv_AUC_pooled')
                 test_auc = info.get('test_AUC')
-                if test_auc is None and cv_mean is not None:
-                    test_auc = cv_mean  # CV path: use mean fold test AUC as Test_AUC
+                if test_auc is None:
+                    test_auc = cv_pooled if cv_pooled is not None else cv_mean
                 y_pred = organ_data[pred_col].values
                 valid = ~np.isnan(y_pred)
                 if valid.sum() < 5:
@@ -3827,14 +3879,28 @@ def process_all_patients(dvh_dir, patient_data_file, output_dir):
                     'Apparent_AUC': apparent_auc,
                     'CV_AUC_mean': cv_mean,
                     'CV_AUC_std': cv_std,
+                    'CV_AUC_pooled': cv_pooled,
                     'Test_AUC': test_auc,
                     'Constant_Predictor': constant_predictor
                 })
+                oof_pred = info.get('oof_predictions')
+                if oof_pred is not None and len(oof_pred) == len(organ_data):
+                    oof_frames.append(pd.DataFrame({
+                        'PrimaryPatientID': organ_data['PrimaryPatientID'].values,
+                        'Organ': organ,
+                        'Observed_Toxicity': y_true,
+                        'Model': model_name,
+                        'OOF_Prediction': np.asarray(oof_pred, dtype=float),
+                    }))
         if cv_rows:
             cv_df = pd.DataFrame(cv_rows)
             cv_path = output_path / 'ml_cv_metrics.xlsx'
             cv_df.to_excel(cv_path, index=False)
             print(f"\n[ML CV] Saved CV metrics to {cv_path}")
+        if oof_frames:
+            oof_path = output_path / 'ml_oof_predictions.csv'
+            pd.concat(oof_frames, ignore_index=True).to_csv(oof_path, index=False)
+            print(f"[ML CV] Saved out-of-fold predictions to {oof_path}")
     except Exception as e:
         print(f"\n[ML CV] Warning: Could not export ml_cv_metrics.xlsx: {e}")
     
@@ -4154,17 +4220,14 @@ def perform_hospital_validation(results_df: pd.DataFrame, output_dir: Path) -> b
     return False
 
 def get_data_quality_rating(n_patients, n_events):
-    """Enhanced data quality assessment"""
+    """Conservative data sufficiency assessment for predictive modelling."""
     if n_events < 5:
         return 'Poor (< 5 events, ML not feasible)'
     elif n_events < 10:
         return 'Fair (5-9 events, limited ML)'
-    elif n_patients < 30:
-        return 'Good (≥10 events, ML possible)'
-    elif n_patients >= 50 and n_events >= 15:
-        return 'Excellent (≥15 events, ≥50 patients, ML reliable)'
-    else:
-        return 'Very Good (adequate for ML)'
+    elif n_patients < 100:
+        return 'Exploratory (small single-cohort dataset; external validation required)'
+    return 'Development dataset (independent external validation still required)'
 
 def get_clinical_recommendation(best_auc, n_events, ml_models):
     """Enhanced clinical recommendation including ML considerations"""
@@ -4177,15 +4240,15 @@ def get_clinical_recommendation(best_auc, n_events, ml_models):
     if auc_val < 0.6:
         return 'Poor discrimination - not recommended for clinical use'
     elif auc_val < 0.7:
-        base_rec = 'Moderate discrimination - use with caution'
+        base_rec = 'Limited discrimination - research use only'
     elif auc_val < 0.8:
-        base_rec = 'Good discrimination - suitable for clinical decision support'
+        base_rec = 'Promising discrimination - external validation required before clinical use'
     else:
-        base_rec = 'Excellent discrimination - highly suitable for clinical use'
+        base_rec = 'Strong apparent discrimination - external validation required before clinical use'
     
     # Add ML-specific recommendations
     if ml_models:
-        base_rec += '; ML models available for enhanced predictions'
+        base_rec += '; ML results are exploratory'
     
     return base_rec
 
@@ -5089,8 +5152,9 @@ def main():
         print("    • model_performance_analysis.png - Performance comparison")
         print("    • overall_performance_summary.png - Summary overview")
         
-        # Display enhanced key findings
-        print("\n Enhanced Key Findings:")
+        # Display descriptive findings. Apparent AUCs are intentionally labelled
+        # as such and must not be used for clinical deployment claims.
+        print("\n Descriptive Key Findings:")
         
         # Summary by organ
         # Multi-OAR safety: always use sorted organ list
@@ -5124,16 +5188,12 @@ def main():
             # Report best models
             if traditional_aucs:
                 best_trad = max(traditional_aucs, key=lambda x: x[1])
-                print(f"    Best traditional: {best_trad[0]} (AUC = {best_trad[1]:.3f})")
+                print(f"    Best traditional apparent AUC: {best_trad[0]} ({best_trad[1]:.3f})")
             
             if ml_aucs:
                 best_ml = max(ml_aucs, key=lambda x: x[1])
-                print(f"    Best ML: {best_ml[0]} (AUC = {best_ml[1]:.3f})")
-                
-                # Calculate improvement
-                if traditional_aucs:
-                    improvement = ((best_ml[1] - best_trad[1]) / best_trad[1]) * 100
-                    print(f"    ML improvement: {improvement:+.1f}%")
+                print(f"    Best ML apparent AUC: {best_ml[0]} ({best_ml[1]:.3f})")
+                print("    Use ml_cv_metrics.xlsx and ml_oof_predictions.csv for validation performance.")
             else:
                 print(f"    ML models: Not trained (insufficient data)")
         
@@ -5141,8 +5201,8 @@ def main():
         print("  1. Review ntcp_results.xlsx for comprehensive results")
         print("  2. Examine publication-ready plots in plots/ directory")
         print("  3. Read enhanced_analysis_report.txt for detailed findings")
-        print("  4. Consider ML model deployment if performance is superior")
-        print("  5. Validate findings with external cohorts")
+        print("  4. Treat all ML results as exploratory and use out-of-fold metrics")
+        print("  5. Obtain independent external validation before any clinical use")
         print("  6. Use unique color coding to distinguish model types:")
         print("     - Traditional NTCP: Blue (LKB LogLogit), Red (LKB Probit), Gold (RS Poisson)")
         print("     - ML models: Purple (ANN), Green (XGBoost)")
@@ -5897,4 +5957,4 @@ def main():
             print(f"  Warning: Manuscript materials bundle failed: {e}")
 
 if __name__ == "__main__":
-    main()   
+    main()

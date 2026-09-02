@@ -11,6 +11,7 @@ Software: py_ntcpx_v1.0.0
 
 import unittest
 import pandas as pd
+from pandas.api.types import is_string_dtype
 import numpy as np
 from pathlib import Path
 import tempfile
@@ -91,7 +92,7 @@ class TestPatientDataValidation(unittest.TestCase):
         })
         
         # All organs should be strings
-        self.assertTrue(data['Organ'].dtype == 'object')
+        self.assertTrue(is_string_dtype(data['Organ']))
         self.assertTrue(data['Organ'].notna().all())
 
 
