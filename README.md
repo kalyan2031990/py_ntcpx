@@ -1,10 +1,10 @@
-# py_ntcpx_v1.0.0 — NTCP Analysis and Machine Learning Pipeline
+# py_ntcpx — NTCP Analysis and Machine Learning Pipeline
 
 NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, SHAP-based interpretability, and LIME explanations.
 
 ## Version
 
-- **Current version:** v1.0.0  
+- **Current version:** v1.1.1
 - **Author:** K. Mondal (North Bengal Medical College, Darjeeling, India.)  
 
 ## Quick start
