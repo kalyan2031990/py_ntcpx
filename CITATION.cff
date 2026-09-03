@@ -1,12 +1,13 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "py_ntcpx_v1.0.0 – NTCP Analysis and Machine Learning Pipeline"
-version: "1.0.0"
-date-released: "2026-02-27"
+title: "py_ntcpx – NTCP Analysis and Machine Learning Pipeline"
+version: "1.1.1"
+date-released: "2026-09-03"
 authors:
   - family-names: "Mondal"
     given-names: "K."
     affiliation: "North Bengal Medical College, Darjeeling, India."
+    orcid: "https://orcid.org/0000-0001-7685-7391"
     role: "Medical Physicist"
 license: "MIT"
 repository-code: "https://github.com/kalyan2031990/py_ntcpx"
@@ -18,4 +19,3 @@ keywords:
   - LKB
   - Relative Seriality
   - Machine Learning
-

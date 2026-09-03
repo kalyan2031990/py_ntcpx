@@ -1,0 +1,37 @@
+{
+  "upload_type": "software",
+  "title": "py_ntcpx v1.1.1 — NTCP analysis and machine learning pipeline for radiotherapy dose–volume data",
+  "version": "1.1.1",
+  "language": "eng",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Mondal, K.",
+      "affiliation": "North Bengal Medical College, Darjeeling, India",
+      "orcid": "0000-0001-7685-7391"
+    }
+  ],
+  "description": "<p><strong>py_ntcpx v1.1.1 is a correctness release.</strong> It corrects twelve defects found while re-executing the published v1.1.0 pipeline from the raw dose–volume histograms and reconciling every published value against that run. <strong>No study design, model, hyperparameter or dataset was changed.</strong></p><p>py_ntcpx computes normal tissue complication probability (NTCP) from cumulative dose–volume histograms using classical radiobiological models (Lyman–Kutcher–Burman probit and log-logistic, relative-seriality Poisson, gEUD) alongside a four-tier machine-learning evaluation, with calibration, overfitting grading and SHAP/LIME explainability.</p><h4>What changed in 1.1.1</h4><ul><li><strong>Reproducibility:</strong> the Monte Carlo samplers, SHAP bootstrap resampling and LIME were unseeded; all are now seeded and repeat runs are bit-identical.</li><li><strong>Evaluation correctness:</strong> Tier-4 apparent AUC was computed from the first cross-validation fold's model applied to every patient; each model is now refit on the full cohort. Tier-3 standardisation is now fitted inside each fold. Summary metrics are now read at full precision rather than from a four-decimal workbook.</li><li><strong>Reporting honesty:</strong> clinical-suitability language derived from an overfitted model's apparent AUC has been removed.</li><li><strong>Cohort Consistency Score:</strong> a single documented column is emitted, with <code>ccs_specification.json</code> recording the metrics, covariance treatment and the adaptive nature of the 0.10 threshold.</li><li><strong>Overfitting grading:</strong> one documented four-level scheme now produces every grade.</li></ul><p>Full details are in <code>CHANGELOG.md</code> and the release notes for tag <code>py_ntcpx_v1.1.1</code>.</p><h4>Data</h4><p>The accompanying archive is keyed on anonymised identifiers <code>PT001</code>–<code>PT054</code> only. No patient name, hospital identifier or exporting user appears anywhere in the deposit. The identifier mapping is the re-identification key and is deliberately not deposited.</p>",
+  "keywords": [
+    "NTCP",
+    "radiotherapy",
+    "dose-volume histogram",
+    "Lyman-Kutcher-Burman",
+    "relative seriality",
+    "gEUD",
+    "xerostomia",
+    "parotid",
+    "machine learning",
+    "model calibration",
+    "reproducibility"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/kalyan2031990/py_ntcpx/tree/py_ntcpx_v1.1.1",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}
