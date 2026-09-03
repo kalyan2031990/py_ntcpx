@@ -1,11 +1,21 @@
 # py_ntcpx — NTCP Analysis and Machine Learning Pipeline
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22261393.svg)](https://doi.org/10.5281/zenodo.22261393)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, SHAP-based interpretability, and LIME explanations.
 
 ## Version
 
 - **Current version:** v1.1.1
 - **Author:** K. Mondal (North Bengal Medical College, Darjeeling, India.)  
+- **Archived release:** [10.5281/zenodo.22261393](https://doi.org/10.5281/zenodo.22261393)
+
+## Citation
+
+> Mondal, K. (2026). *py_ntcpx v1.1.1 — a reproducible NTCP modelling and machine learning pipeline for radiotherapy dose–volume data*. Zenodo. https://doi.org/10.5281/zenodo.22261393
+
+Machine-readable metadata is in [`CITATION.cff`](CITATION.cff).
 
 ## Quick start
 

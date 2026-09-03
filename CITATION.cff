@@ -1,8 +1,9 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "py_ntcpx – NTCP Analysis and Machine Learning Pipeline"
+title: "py_ntcpx — a reproducible NTCP modelling and machine learning pipeline for radiotherapy dose–volume data"
 version: "1.1.1"
 date-released: "2026-09-03"
+doi: "10.5281/zenodo.22261393"
 authors:
   - family-names: "Mondal"
     given-names: "K."
@@ -12,10 +13,19 @@ authors:
 license: "MIT"
 repository-code: "https://github.com/kalyan2031990/py_ntcpx"
 url: "https://github.com/kalyan2031990/py_ntcpx"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22261393"
+    description: "Archived release of py_ntcpx v1.1.1"
 keywords:
   - NTCP
+  - normal tissue complication probability
   - Radiotherapy
   - DVH
   - LKB
   - Relative Seriality
+  - gEUD
+  - QUANTEC
   - Machine Learning
+  - Model calibration
+  - Reproducibility
