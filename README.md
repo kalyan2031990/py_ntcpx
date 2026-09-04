@@ -1,6 +1,6 @@
 # py_ntcpx — NTCP Analysis and Machine Learning Pipeline
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22261393.svg)](https://doi.org/10.5281/zenodo.22261393)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22296074.svg)](https://doi.org/10.5281/zenodo.22296074)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head & neck cancer: DVH preprocessing, classical and logistic NTCP models, uncertainty quantification, SHAP-based interpretability, and LIME explanations.
