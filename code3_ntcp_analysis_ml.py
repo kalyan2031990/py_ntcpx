@@ -406,9 +406,16 @@ class NTCPCalculator:
         }
     
     def convert_to_eqd2(self, dose, alpha_beta_ratio, dose_per_fraction, n_fractions=None):
-        """Convert physical dose to EQD2"""
-        if np.isnan(dose) or dose <= 0:
+        """Convert physical dose to EQD2.
+
+        A zero-dose DVH bin is legitimate and converts to EQD2 = 0; only negative or
+        missing doses are undefined. Returning NaN for dose == 0 previously propagated
+        through the relative-seriality sum and silently dropped the whole patient.
+        """
+        if np.isnan(dose) or dose < 0:
             return np.nan
+        if dose == 0:
+            return 0.0
             
         if dose_per_fraction is None:
             if n_fractions is not None:

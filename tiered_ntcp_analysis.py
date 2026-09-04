@@ -261,6 +261,14 @@ def add_tier2_mle_predictions(results_df, dvh_dir, output_dir, dvh_dict=None):
     return results_df
 
 
+class ClinicalCovariateError(RuntimeError):
+    """Raised when Tier 3 is asked for a model whose covariates are unavailable.
+
+    Silently substituting a different feature set is the failure mode this
+    evaluation framework exists to detect, so it is refused rather than logged.
+    """
+
+
 def add_tier3_logistic_predictions(results_df, clinical_file, output_dir,
                                    cv_strategy: str = 'auto', include_age: bool = True):
     """
@@ -278,14 +286,39 @@ def add_tier3_logistic_predictions(results_df, clinical_file, output_dir,
     print("TIER 3: Modern Multivariable Logistic NTCP")
     print("="*60)
     
-    # Load clinical data if available
+    # Load clinical data.
+    #
+    # Tier 3 must never silently change its own feature set: dropping the age
+    # indicator moves the leave-one-out AUC from 0.673 to 0.536, which would be
+    # reported as if it were the specified model. When age is requested the
+    # clinical covariates are mandatory and their absence is a hard error.
     clinical_data = None
     if clinical_file and Path(clinical_file).exists():
         try:
             clinical_data = pd.read_excel(clinical_file)
-            print(f"  Loaded clinical data from: {clinical_file}")
-        except:
-            print(f"  Warning: Could not load clinical data, using DVH-only model")
+        except Exception as exc:
+            raise ClinicalCovariateError(
+                f"Clinical covariate file {clinical_file!r} could not be read ({exc}). "
+                f"Tier 3 was requested with include_age=True and cannot proceed without it. "
+                f"Pass a readable workbook, or re-run with --no-include-age to fit the "
+                f"DVH-only model explicitly."
+            ) from exc
+        missing = [c for c in ('age',) if c not in clinical_data.columns]
+        if include_age and missing:
+            raise ClinicalCovariateError(
+                f"Clinical workbook {clinical_file!r} lacks required column(s) {missing}. "
+                f"Tier 3 with include_age=True needs them; re-run with --no-include-age "
+                f"to fit the DVH-only model explicitly."
+            )
+        print(f"  Loaded clinical data from: {clinical_file}")
+    elif include_age:
+        raise ClinicalCovariateError(
+            "Tier 3 was requested with include_age=True but no clinical covariate file was "
+            "supplied (--clinical_file). The age indicator would be dropped and the reported "
+            "leave-one-out AUC would fall from 0.673 to 0.536 without any warning. "
+            "Pass --clinical_file, or re-run with --no-include-age to fit the DVH-only "
+            "model explicitly."
+        )
     
     logistic_model = ModernLogisticNTCP(include_age=include_age)
     tier3_metrics = {}

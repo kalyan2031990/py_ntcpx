@@ -1,5 +1,73 @@
 # py_ntcpx — changelog
 
+## v1.1.2 — reviewer-response corrections (2026-09-04)
+
+Addresses defects identified in pre-submission peer review of the ROPR manuscript. Every
+change is a correctness or transparency fix; none alters the study's conclusions, and two
+strengthen them.
+
+### Correctness
+
+- **C17 — a zero-dose DVH bin voided the whole patient.** `NTCPCalculator.convert_to_eqd2`
+  returned `NaN` for `dose <= 0`. EQD2(0) = 0 under the linear-quadratic expression; only a
+  negative or missing dose is undefined. The `NaN` propagated through the relative-seriality
+  sum and silently dropped one patient, so RS was reported on 53 of 54 patients and the
+  manuscript described the EQD2 conversion as "undefined" for a zero bin, which is wrong.
+  The guard is now `dose < 0`, `dose == 0` returns 0.0, and RS is estimable in all 54
+  patients (AUC 0.537 against the previously reported 0.519; Brier 0.284; ECE 0.161).
+
+- **C18 — Tier 3 silently substituted a different feature set.** Running without
+  `--clinical_file` dropped the `age_over_50` indicator and returned a leave-one-out AUC of
+  0.536 in place of 0.673, logging nothing. v1.1.1 documented this as a usage caveat; it is
+  now a hard error. `add_tier3_logistic_predictions` raises `ClinicalCovariateError` when age
+  is requested and the covariates are unavailable, and `--no-include-age` makes the DVH-only
+  model an explicit choice. A framework whose purpose is to detect misreported model
+  performance must not misreport its own.
+
+### Validation
+
+- **Common internal-validation engine (`analysis/oof_engine.py`).** Out-of-fold probabilities
+  for every trainable model now come from one shared set of stratified folds, with feature
+  selection, scaling and classical parameter refitting confined to the training portion of
+  each fold. Previously Tier-4 feature selection ran once on all 54 patients before the
+  cross-validation split — selection leakage, acknowledged in a source comment — and
+  out-of-fold predictions existed only for Tier 3, so the Tier-4 decision curves were
+  apparent while the manuscript described them as showing an out-of-fold reversal.
+
+  With genuine out-of-fold probabilities the reversal is larger than previously claimed. The
+  random forest's apparent advantage over treat-all at a threshold of 0.50 is statistically
+  supported (+0.201, 95% CI +0.019 to +0.370); out of fold it falls below treat-all and is
+  significantly worse at 0.40 (−0.130, 95% CI −0.223 to −0.056). Neither XGBoost nor the
+  neural network exceeds treat-all at any out-of-fold threshold.
+
+- Repeating feature selection inside each fold returns three different three-feature sets
+  across five folds, only V30 recurring in a majority. The single set reported by earlier
+  releases (mean dose, V30, V45) is an artefact of selecting once on the whole cohort.
+
+- Calibration intercept and slope are reported alongside expected calibration error, which is
+  noisy with 54 patients in five bins. All three Tier-4 models have negative out-of-fold
+  calibration slopes.
+
+### Metrics
+
+- **Cohort Consistency Score reported on a calibrated scale (`analysis/ccs_calibrated.py`).**
+  CCS is a monotone transform of a squared Mahalanobis distance, so under a multivariate
+  normal reference on six features roughly 60% of a typical cohort falls below the 0.10
+  software flag. The observed 43% is therefore not evidence of an atypical cohort, and the
+  observed mean squared distance of 5.89 is close to its expectation of 6. The chi-square
+  tail probability is now reported, computed against a reference excluding the index patient:
+  10 of 54 (19%) exceed the 95th centile and 6 of 54 (11%) the 99th.
+
+### Tests
+
+- `tests/test_regression_defects.py` pins C16, C17 and C18. Full suite: 57 passed, 2 skipped.
+
+### Figures
+
+- `figures/generate_figures_ROPR.py` panel (f) plots out-of-fold curves for every model rather
+  than one. The data directory is configurable via `FIG_DATA`.
+
+
 ## v1.1.1 — correctness release (2026-09-02)
 
 Eleven defects were found while re-executing the published v1.1.0 pipeline from the raw
@@ -285,50 +353,4 @@ replaces it with the workbook that reproduces the published results.
 
 # Changelog
 
-All notable changes to py_ntcpx since the first public release (v1.0.0) are documented here.
 
-**Author:** K. Mondal (Medical Physicist, North Bengal Medical College, Darjeeling, India)  
-**Repository:** https://github.com/kalyan2031990/py_ntcpx
-
----
-
-## [Unreleased] – 2026-03-01 (post–v1.0.0 improvements)
-
-### Added
-- **ML CV metrics export (`code3`):** New file `ml_cv_metrics.xlsx` with Apparent_AUC, CV_AUC_mean, CV_AUC_std, Test_AUC, and Constant_Predictor per organ/model (ANN, XGBoost, Random Forest).
-- **Calibration metrics:** ECE (Expected Calibration Error) and MCE (Maximum Calibration Error) in tiered `ml_validation.xlsx` for all models.
-- **Overfitting flag:** Column `Overfitting_Flag` in `ml_validation.xlsx` set to `"High"` when Overfitting_Gap > 0.1.
-- **Small-sample note:** New sheet `Note` in `ml_validation.xlsx` advising to prefer CV_AUC for ML and that results are exploratory when n < 100.
-- **Constant-predictor warning:** Console warning when an ML model produces a single unique prediction value; `Constant_Predictor` column in `ml_cv_metrics.xlsx`.
-
-### Changed
-- **XGBoost (small cohorts):** In `src/models/machine_learning/ml_models.py`, for n < 100: `min_child_weight` 5→2, `learning_rate` 0.03→0.05; for n < 50: `max_depth` 1→2 to avoid constant predictions. Fallback `train_xgboost_model` in `code3_ntcp_analysis_ml.py`: `max_depth` 2, `min_child_weight` 2.
-- **Apparent vs CV/Test AUC:** Tiered `ml_validation.xlsx` now uses a single **Apparent_AUC** column (replacing duplicate Train_AUC/Test_AUC). When code3 `ml_cv_metrics.xlsx` exists, tiered merges CV_AUC_mean, CV_AUC_std, Test_AUC and sets **Overfitting_Gap** = Apparent_AUC − CV_AUC_mean.
-- **Test_AUC in CV path:** When the pipeline uses the CV-only path (n < 100), Test_AUC in `ml_cv_metrics.xlsx` is now set from CV_AUC_mean so the column is always populated.
-- **Clinical factors (code5):** Accept **patient_id** (from code0 reconciled output) and map to PrimaryPatientID so Step 5 merges without manual column renaming.
-- **Test:** `tests/test_ml_models.py` updated so that for very small sample, expected XGBOOST `max_depth` is 2 (was 1).
-
-### Fixed
-- XGBoost producing constant predictions (single value for all patients) on small cohorts.
-- Test_AUC missing (NaN) in `ml_cv_metrics.xlsx` when using 5-fold CV path.
-- Code5 factors analysis failing with "Clinical data must contain PrimaryPatientID, DVH_ID, or PatientID" when clinical data used code0's `patient_id` column.
-- Overfitting reported as 0 despite large Apparent–CV gap; now Overfitting_Gap and Overfitting_Flag reflect actual gap.
-
-### Documentation
-- `docs/PIPELINE_QA_AND_IMPROVEMENTS.md` – QA notes, XGBoost explanation, and improvement suggestions.
-- `docs/PIPELINE_IMPROVEMENTS_AND_ANALYSIS_REPORT.md` – Implementation summary and post-run analysis.
-- `docs/RELEASE_NOTES_GITHUB.md` – Release text for GitHub (copy into release description).
-
----
-
-## [1.0.0] – 2026-02-28
-
-First public release. See [Release py_ntcpx v1.0.0](https://github.com/kalyan2031990/py_ntcpx/releases/tag/py_ntcpx_v1.0.0) for full notes.
-
-- Pipeline steps 0–8: clinical reconciliation, DVH preprocessing, NTCP (classical + ML), tiered analysis, QA, factors, publication diagrams, SHAP/LIME, publication tables.
-- Overfitting and data-leakage safeguards (EPV, CCS, conservative ML).
-- SHAP and LIME explainability for ANN, XGBoost, Random Forest.
-- Single canonical output layout under `out2/`.
-
-[Unreleased]: https://github.com/kalyan2031990/py_ntcpx/compare/py_ntcpx_v1.0.0...HEAD
-[1.0.0]: https://github.com/kalyan2031990/py_ntcpx/releases/tag/py_ntcpx_v1.0.0
