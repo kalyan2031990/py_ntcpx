@@ -7,13 +7,13 @@ NTCP (Normal Tissue Complication Probability) analysis and ML pipeline for head 
 
 ## Version
 
-- **Current version:** v1.1.1
+- **Current version:** v1.1.2
 - **Author:** K. Mondal (North Bengal Medical College, Darjeeling, India.)  
-- **Archived release:** [10.5281/zenodo.22261393](https://doi.org/10.5281/zenodo.22261393)
+- **Archived release:** [10.5281/zenodo.22296074](https://doi.org/10.5281/zenodo.22296074)
 
 ## Citation
 
-> Mondal, K. (2026). *py_ntcpx v1.1.1 — a reproducible NTCP modelling and machine learning pipeline for radiotherapy dose–volume data*. Zenodo. https://doi.org/10.5281/zenodo.22261393
+> Mondal, K. (2026). *py_ntcpx v1.1.2 — a reproducible NTCP modelling and machine learning pipeline for radiotherapy dose–volume data*. Zenodo. https://doi.org/10.5281/zenodo.22296074
 
 Machine-readable metadata is in [`CITATION.cff`](CITATION.cff).
 
